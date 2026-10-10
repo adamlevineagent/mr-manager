@@ -10,7 +10,7 @@ The loop:
   mrm nudge NAME "correction"                            steer mid-task (lands at its next step)
   mrm scrap NAME [--force]                               throw the lane away
 
-Also: probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
+Also: board [--url] | probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
 The watchdog enforces time boxes and flags ceremony on its own. Every lane ends in accept or scrap.
 assign --auto lets the watchdog accept a clean DONE itself (check passes, in budget, no ceremony);
 those show up under MERGED WHILE YOU WERE AWAY on the next `mrm status`.
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import brief as briefs
 from . import accept as acc
-from . import core, lanes, lifecycle
+from . import core, lanes, lifecycle, board
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -252,53 +252,78 @@ def merged_while_away():
 
 
 def cmd_status(a):
-    ws = core.workers()
+    board.refresh_counts()
+    data = board.board_data()
     merged_while_away()
-    if not ws:
-        print("no workers. Assign one: mrm assign NAME \"outcome\" --repo PATH --check \"CMD\"")
-        return
-    needs, working, other, parked = [], [], [], []
-    for name, w in ws.items():
-        st = w.get("state")
-        if st == "parked":
-            parked.append((name, w))
+    if not data["lanes"]:
+        print('no workers. Assign one: mrm assign NAME "outcome" --repo PATH --check "CMD"')
+    group = None
+    parked = []
+    for row in data["lanes"]:
+        status = row["status"]
+        if status == "PARKED":
+            parked.append(row["name"])
             continue
-        (working if st in ("working", "accepting") else needs if st == "idle" else other).append((name, w))
-    if needs:
-        print("NEEDS YOU (oldest first)")
-        for name, w in sorted(needs, key=lambda x: x[1].get("waiting_since") or 0):
-            counts, flags = live_counts(w, name)
-            head = (w.get("report") or "").strip().splitlines()
-            head = head[0][:110] if head else "(no report)"
-            print(f"  {name:<22} {w.get('report_kind') or '?':<8} waiting {ago(w.get('waiting_since')):>5}  "
-                  f"{counts}{'  ⚑ ' + '; '.join(flags) if flags else ''}")
-            print(f"  {'':<22} {head}")
-            if w.get("auto_note"):
-                print(f"  {'':<22} not auto-merged: {w['auto_note']}")
-        print("  -> mrm review NAME, then accept / reject / scrap\n")
-    if working:
-        print("WORKING")
-        for name, w in sorted(working, key=lambda x: x[1].get("started") or 0):
-            counts, flags = live_counts(w, name)
-            box = w.get("timebox")
-            el = (time.time() - (w.get("clock_from") or w.get("started") or time.time())) / 60
-            over = "  OVER TIME BOX" if box and el > box else ""
-            if w.get("state") == "accepting":
-                print(f"  {name:<22} DONE, auto-accepting (integrate, check, merge)  {counts}")
-                continue
-            print(f"  {name:<22} {int(el)}m/{box or '-'}m{over}{'  auto' if w.get('auto') else ''}  {counts}"
-                  f"{'  ⚑ ' + '; '.join(flags) if flags else ''}")
-    if other:
-        print("OTHER")
-        for name, w in other:
-            print(f"  {name:<22} state unknown (the watchdog hasn't seen it yet)")
+        heading = "WORKING" if status in ("WORKING", "AUTO-MERGE") else status
+        if heading != group:
+            print(heading + (" (oldest first)" if heading == "NEEDS YOU" else ""))
+            group = heading
+        timing = (f"waiting {int(row['waiting_minutes'])}m" if status == "NEEDS YOU" else
+                  f"{int(row['elapsed_minutes'])}m/{row['timebox'] or '-'}m")
+        counts = (f"{row['commits']} commits, {row['lines']} lines" if row["commits"] is not None else "")
+        flags = "  " + "; ".join(row["flags"]) if row["flags"] else ""
+        print(f"  {row['name']:<22} {status:<10} {row['report_kind'] or ''} {timing}  {counts}{flags}"
+              + ("  auto" if row["auto"] else "") + ("  adopted" if row["adopted"] else ""))
+        if row["note"]:
+            print(f"  {'':<22} {row['note']}")
     if parked:
-        print(f"\nPARKED ({len(parked)}): " + ", ".join(
-            name + (f" ({w['parked_why']})" if w.get("parked_why") else "") for name, w in parked))
+        print(f"\nPARKED ({len(parked)}): " + ", ".join(parked))
+    group = None
+    for row in data["watched"]:
+        if row["source"] != group:
+            group = row["source"]
+            print(f"\n{group} (read-only)")
+        print(f"  {row['name']:<22} {row['status']:<10} {('--' if row['elapsed_minutes'] is None else str(int(row['elapsed_minutes'])) + 'm')}  {row['repo']}")
     leftovers = backlog()
     if leftovers:
-        print(f"\n⚑ {len(leftovers)} leftover lane(s) on disk; run: mrm gc")
-    print_lane_disk_usage(ws)
+        print(f"\n{len(leftovers)} leftover lane(s) on disk; run: mrm gc")
+    if data["disk_bytes"] is not None:
+        print(f"lanes on disk: {data['disk_bytes'] / lanes.GB:.1f} GB")
+
+
+def cmd_board(a):
+    url = f"http://127.0.0.1:{core.PORT}/board"
+    if a.url:
+        print(url)
+        return
+    if not core.ensure_daemon():
+        raise SystemExit("the mrm daemon couldn't be started (try: mrm setup)")
+    if os.name == "nt":
+        candidates = [shutil.which("msedge"), shutil.which("chrome")]
+        for browser, folder in (("msedge.exe", "Microsoft/Edge/Application"),
+                                ("chrome.exe", "Google/Chrome/Application")):
+            for root in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+                if os.environ.get(root):
+                    candidates.append(str(Path(os.environ[root]) / folder / browser))
+        # Prefer Edge even when only Chrome is on PATH.
+        candidates.sort(key=lambda p: 0 if p and "edge" in p.lower() else 1)
+        for exe in candidates:
+            if exe and Path(exe).is_file():
+                try:
+                    subprocess.Popen([exe, f"--app={url}"])
+                    return
+                except OSError:
+                    pass
+        os.startfile(url)
+    elif sys.platform == "darwin":
+        chrome = Path("/Applications/Google Chrome.app")
+        user_chrome = Path.home() / "Applications/Google Chrome.app"
+        if chrome.exists() or user_chrome.exists():
+            subprocess.Popen(["open", "-na", str(chrome if chrome.exists() else user_chrome), "--args", f"--app={url}"])
+        else:
+            subprocess.Popen(["open", url])
+    else:
+        subprocess.Popen(["xdg-open", url])
 
 
 def cmd_wait(a):
@@ -663,6 +688,9 @@ def main(argv=None):
     s.set_defaults(fn=cmd_assign)
 
     sub.add_parser("status", help="the board").set_defaults(fn=cmd_status)
+    s = sub.add_parser("board", help="open the live split-flap board")
+    s.add_argument("--url", action="store_true", help="print the board URL")
+    s.set_defaults(fn=cmd_board)
     s = sub.add_parser("wait", help="block until a worker needs you"); s.add_argument("names", nargs="*")
     s.add_argument("--timeout", type=float, default=3600); s.set_defaults(fn=cmd_wait)
     s = sub.add_parser("review", help="report, check, diff and flags for one worker"); s.add_argument("name")
