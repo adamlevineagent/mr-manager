@@ -88,7 +88,26 @@ mrm scrap NAME                                      # throw the lane away
 
 Also: `mrm probe [ACCOUNT]` (a tiny real turn for one or all accounts, without the daemon; shows the CLI,
 version and actual error on failure), `park NAME [why]` (keep a finished lane on purpose, off NEEDS YOU; `--undo`), `check NAME [CMD]`, `tail NAME -f`, `read NAME`, `diff NAME`, `history [NAME]`, `usage`,
-`gc [--clean]`, `attach NAME --repo PATH`, `account add|list|remove`, `config`.
+`gc [--clean]`, `attach NAME --repo PATH`, `account add|list|remove`, `config`, `slot NAME -- CMD`.
+
+## Shared build and database slots
+
+Use `mrm slot build -- cargo test -j 16` to serialize native builds across repos,
+or `mrm slot db -- python integration_check.py` to limit concurrent database work.
+The command inherits your directory, environment and terminal; its exit code is returned.
+No daemon is needed. Commands start in FIFO ticket order per resource, up to its capacity.
+
+The `slots` object in `~/.mr-manager/config.json` defaults to `{"build": 1, "db": 8}`.
+Change it with `mrm config slots '{"build":1,"db":8}'` (or edit the JSON file).
+Capacities must be positive integers; unlisted names have capacity 1. All repos and
+lanes must use the same mrm home (`MRM_HOME` overrides it) to share the machine's queue.
+Tickets live in `slots.sqlite3` there; dead waiters and holders are pruned by PID on
+admission and status. If a wrapper dies while its command is still running, that
+command keeps its seat until it exits. `mrm status` and the `slots` field in `/board.json`
+show live holders and queue lengths.
+Capacity changes apply to new invocations; let existing invocations finish before
+changing a resource's budget. Wrap the full resource-consuming command, including
+any waits, and do not launch detached work from it.
 
 A lane can work in another repo too: create a worktree there on `worker/NAME` or
 `worker/NAME-<suffix>`, then run `mrm attach NAME --repo PATH` (the main repo or its

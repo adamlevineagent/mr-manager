@@ -29,6 +29,8 @@ HOME = _home()
 PORT = int(os.environ.get("MRM_PORT") or os.environ.get("FOREMAN_PORT") or "8777")
 
 DEFAULT_CONFIG = {
+    # Machine-wide resource budgets; unlisted slot names have one seat.
+    "slots": {"build": 1, "db": 8},
     "watch": [],  # Read-only boards from older local daemons; never managed here.
     # Codex homes to run workers on. Add more with `mrm account add`.
     "accounts": {"a": {"kind": "headless", "home": str(Path.home() / ".codex")}},

@@ -10,7 +10,7 @@ The loop:
   mrm nudge NAME "correction"                            steer mid-task (lands at its next step)
   mrm scrap NAME [--force]                               throw the lane away
 
-Also: attach NAME --repo PATH | board [--url] | probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
+Also: slot NAME -- CMD | attach NAME --repo PATH | board [--url] | probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
 The watchdog enforces time boxes and flags ceremony on its own. Every lane ends in accept or scrap.
 assign --auto lets the watchdog accept a clean DONE itself (check passes, in budget, no ceremony);
 those show up under MERGED WHILE YOU WERE AWAY on the next `mrm status`.
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import brief as briefs
 from . import accept as acc
-from . import core, lanes, lifecycle, board
+from . import core, lanes, lifecycle, board, slots
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -275,6 +275,7 @@ def merged_while_away():
 def cmd_status(a):
     board.refresh_counts()
     data = board.board_data()
+    slots.print_status(data["slots"])
     merged_while_away()
     if not data["lanes"]:
         print('no workers. Assign one: mrm assign NAME "outcome" --repo PATH --check "CMD"')
@@ -728,6 +729,11 @@ def cmd_probe(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="mrm", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("slot", help="run a command in a FIFO resource queue (no daemon)")
+    s.add_argument("name")
+    s.add_argument("command", nargs=argparse.REMAINDER, help="-- CMD [ARG ...]")
+    s.set_defaults(fn=slots.cmd_slot)
 
     s = sub.add_parser("assign", help="brief a worker in its own lane")
     s.add_argument("name")

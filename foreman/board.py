@@ -8,7 +8,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import core, lanes
+from . import core, lanes, slots
 
 _counts = {}
 _lock = threading.Lock()
@@ -176,4 +176,4 @@ def board_data():
     watched = watched_rows(now)
     sizes.extend(r["disk_bytes"] for r in watched if r["disk_bytes"] is not None)
     return dict(now=now, lanes=rows, watched=watched, merged=merged, quotas=dict(quotas),
-                disk_bytes=sum(sizes) if sizes else None)
+                disk_bytes=sum(sizes) if sizes else None, slots=slots.snapshot())
