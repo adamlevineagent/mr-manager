@@ -12,6 +12,7 @@ The watchdog is where the opinions enforce themselves, whether or not anyone is 
 Every event is appended to events.jsonl, which `mrm wait` follows.
 """
 import json
+import re
 import threading
 import time
 import traceback
@@ -40,7 +41,8 @@ def event(name, kind, **data):
 def report_kind(text):
     head = (text or "").strip().lstrip("-*• ").upper()
     for k in ("PLAN", "DONE", "PARTIAL", "BLOCKED"):
-        if head.startswith(k) or head.startswith(f"**{k}"):
+        # whole word only: "PLANNED ..." or "DONEish" aren't report kinds
+        if re.match(rf"(\*\*)?{k}(?![A-Z])", head):
             return k
     return None
 
