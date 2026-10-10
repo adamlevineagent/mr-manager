@@ -115,6 +115,7 @@ def cmd_assign(a):
     in_git = subprocess.run(["git", "-C", repo_path, "rev-parse", "--show-toplevel"], capture_output=True).returncode == 0
     readonly = a.readonly or not in_git
     prof = lanes.profile(lifecycle.repo_top(repo_path)) if in_git else {}
+    plan_first = a.plan if a.plan is not None else bool(prof.get("plan_first"))
     # --no-check "why" means no check, even when the repo profile declares a default one.
     check = None if (a.no_check and not a.check) else lanes.native_check(a.check or prof.get("check"))
     if not readonly and not check and not a.no_check:
@@ -142,14 +143,15 @@ def cmd_assign(a):
         lane = {"port_base": port_base, "port_count": count}
     text = briefs.build(a.name, outcome, workdir, check=check, out_of_scope=a.not_doing,
                         context=a.read, timebox=timebox, size=size, readonly=readonly, lane=lane,
-                        notes=prof.get("notes"), branch=branch, base=base)
+                        notes=prof.get("notes"), branch=branch, base=base, plan_first=plan_first)
     if detail:
         text += "\n\n## More detail from the manager\n\n" + detail
     env = lanes.lane_env(lane["port_base"], lane["port_count"], prof, a.name) if lane else None
     tid = core.backend(account).create(prompt=text, title=f"mrm · {a.name}", cwd=workdir,
                                        model=a.model or d.get("model"), effort=a.effort or d.get("effort"), env=env)
     core.save_worker(a.name, account=account, thread=tid, project=repo_path, workdir=workdir, repo=repo, base=base,
-                     isolated=bool(repo), started=time.time(), clock_from=time.time(), timebox=timebox, size=size,
+                     isolated=bool(repo), started=time.time(), clock_from=None if plan_first else time.time(),
+                     plan_first=plan_first, plan_approved=False, timebox=timebox, size=size,
                      check=check, brief_text=text, outcome=outcome[:500], state="working", readonly=readonly,
                      port_base=lane and lane["port_base"], port_count=lane and lane["port_count"],
                      shared=prof.get("share") or [], env=env, check_timeout=prof.get("check_timeout"), auto=bool(a.auto and not readonly))
@@ -284,11 +286,11 @@ def cmd_status(a):
         if status == "PARKED":
             parked.append(row["name"])
             continue
-        heading = "WORKING" if status in ("WORKING", "AUTO-MERGE") else status
+        heading = "NEEDS YOU" if status == "PLAN REVIEW" else "WORKING" if status in ("WORKING", "AUTO-MERGE") else status
         if heading != group:
             print(heading + (" (oldest first)" if heading == "NEEDS YOU" else ""))
             group = heading
-        timing = (f"waiting {int(row['waiting_minutes'])}m" if status == "NEEDS YOU" else
+        timing = (f"waiting {int(row['waiting_minutes'])}m" if status in ("NEEDS YOU", "PLAN REVIEW") else
                   f"{int(row['elapsed_minutes'])}m/{row['timebox'] or '-'}m")
         counts = (f"{row['commits']} commits, {row['lines']} lines" if row["commits"] is not None else "")
         flags = "  " + "; ".join(row["flags"]) if row["flags"] else ""
@@ -488,6 +490,41 @@ def cmd_park(a):
         raise SystemExit(f"{a.name} is working; park it once it's finished")
     core.save_worker(a.name, state="parked", parked_why=" ".join(a.why) or None)
     print(f"{a.name}: parked. It stays on disk, off the board's NEEDS YOU list. Undo: mrm park {a.name} --undo")
+
+
+def cmd_plan(a):
+    w = core.worker(a.name)
+    text = w.get("plan_text") or (w.get("report") if w.get("report_kind") == "PLAN" else None)
+    if not text:
+        raise SystemExit(f"{a.name} has no PLAN report yet; wait for the worker to finish its plan")
+    dest = Path(a.out).expanduser() if a.out else core.HOME / "plans" / f"{a.name}.md"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    branch = f"worker/{a.name}" if w.get("isolated") else "(read-only)"
+    output = f"Lane: {w['workdir']}\nBranch: {branch}\n\n" + text
+    dest.write_text(output, encoding="utf-8")
+    print(output)
+    print(f"\nSaved plan: {dest}")
+
+
+def cmd_approve(a):
+    w = core.worker(a.name)
+    if not w.get("plan_first") or w.get("plan_approved"):
+        raise SystemExit(f"{a.name} is not awaiting plan approval")
+    if w.get("state") != "idle" or w.get("report_kind") != "PLAN":
+        raise SystemExit(f"{a.name} has no finished PLAN to review yet")
+    review = read_text_arg(a.review)
+    if not review.strip():
+        raise SystemExit("nothing to send")
+    first = review.lstrip().splitlines()[0]
+    revise = bool(re.match(r"VERDICT\s*:?\s*(REJECT|REVISE)\b", first, re.I))
+    order = ("Revise your PLAN following the review. Make no code changes yet, then stop for plan review."
+             if revise else "Build it now, following the review. Then send your final report.")
+    core.backend(w["account"]).send(thread_id=w["thread"], env=w.get("env"),
+                                    text="Manager plan review:\n\n" + review + "\n\n" + order)
+    core.save_worker(a.name, plan_approved=not revise, state="working", waiting_since=None,
+                     clock_from=None if revise else time.time(), wrapup_sent=None, stop_sent=None,
+                     auto_note=None, resumed=0)
+    print(f"{a.name}: " + ("requested a revised PLAN" if revise else "plan approved; build started and time box restarted"))
 
 
 def cmd_nudge(a):
@@ -710,6 +747,10 @@ def main(argv=None):
     s.add_argument("--size", choices=list(core.SIZES))
     s.add_argument("--timebox", type=int, metavar="MINUTES")
     s.add_argument("--readonly", action="store_true", help="research/review: no lane, no edits")
+    plans = s.add_mutually_exclusive_group()
+    plans.add_argument("--plan", dest="plan", action="store_true", default=None,
+                       help="investigate, send a PLAN and stop for review before building")
+    plans.add_argument("--no-plan", dest="plan", action="store_false", help="override repo plan_first default")
     s.add_argument("--account")
     s.add_argument("--model")
     s.add_argument("--effort")
@@ -719,6 +760,10 @@ def main(argv=None):
     s.set_defaults(fn=cmd_assign)
 
     sub.add_parser("status", help="the board").set_defaults(fn=cmd_status)
+    s = sub.add_parser("plan", help="print and save a worker's PLAN for a reviewer")
+    s.add_argument("name"); s.add_argument("--out", metavar="FILE"); s.set_defaults(fn=cmd_plan)
+    s = sub.add_parser("approve", help="send a plan review verbatim and start the build (or request revision)")
+    s.add_argument("name"); s.add_argument("review", help="review text or a file"); s.set_defaults(fn=cmd_approve)
     s = sub.add_parser("board", help="open the live split-flap board")
     s.add_argument("--url", action="store_true", help="print the board URL")
     s.set_defaults(fn=cmd_board)
