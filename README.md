@@ -71,6 +71,13 @@ Assignment options: `--not-doing` (scope), `--read FILE...` (read first), `--det
 `--size small|medium|large`, `--timebox MIN`, `--readonly` (research/review, no lane),
 `--account`, `--model`, `--effort`.
 
+The outcome and `--detail` accept inline text or an existing UTF-8 file. Before creating a lane
+or contacting an account, `assign` refuses unexpanded shell variables (`$n`, `${lane}`, `%LANE%`)
+and missing file paths. Paths include absolute paths, `./` or `../` paths, backslash paths, and
+single words containing `/` or ending in `.md`, `.markdown`, `.txt`, or `.rst`. For paths with
+spaces, use an absolute path or a `./` prefix. Expand variables in your shell or pass a literal
+path to an existing file.
+
 ## Per-repo profile: `.mrm.toml`
 
 ```toml

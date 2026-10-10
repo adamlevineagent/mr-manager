@@ -18,6 +18,7 @@ those show up under MERGED WHILE YOU WERE AWAY on the next `mrm status`.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -84,6 +85,8 @@ def choose_account(explicit=None):
 
 # ------------------------------------------------------------------------------ assign
 def cmd_assign(a):
+    outcome = read_assignment_arg(a.outcome, "brief")
+    detail = read_assignment_arg(a.detail, "--detail") if a.detail else None
     cfg = core.config()
     stop = cfg.get("stop_file")
     if stop and os.path.exists(os.path.expanduser(stop)):
@@ -108,7 +111,6 @@ def cmd_assign(a):
                          "\n".join(f"  {f['kind']:<16} {f['branch']} in {f['repo']}" for f in leftovers) +
                          "\nRun: mrm gc --clean   (removes the merged ones; scrap the rest)")
     d = cfg["defaults"]
-    outcome = read_text_arg(a.outcome)
     repo_path = os.path.abspath(a.repo or os.getcwd())
     in_git = subprocess.run(["git", "-C", repo_path, "rev-parse", "--show-toplevel"], capture_output=True).returncode == 0
     readonly = a.readonly or not in_git
@@ -141,8 +143,8 @@ def cmd_assign(a):
     text = briefs.build(a.name, outcome, workdir, check=check, out_of_scope=a.not_doing,
                         context=a.read, timebox=timebox, size=size, readonly=readonly, lane=lane,
                         notes=prof.get("notes"), branch=branch, base=base)
-    if a.detail:
-        text += "\n\n## More detail from the manager\n\n" + read_text_arg(a.detail)
+    if detail:
+        text += "\n\n## More detail from the manager\n\n" + detail
     env = lanes.lane_env(lane["port_base"], lane["port_count"], prof, a.name) if lane else None
     tid = core.backend(account).create(prompt=text, title=f"mrm · {a.name}", cwd=workdir,
                                        model=a.model or d.get("model"), effort=a.effort or d.get("effort"), env=env)
@@ -154,6 +156,27 @@ def cmd_assign(a):
     where = f"lane {workdir} (branch {branch}, ports {lane['port_base']}+)" if lane else f"{workdir} (read-only)"
     print(f"assigned {a.name} to account {account}: {where}; time box {timebox}m; check: {check or 'none'}"
           + ("; auto-accept on" if a.auto and not readonly else ""))
+
+
+def read_assignment_arg(v, label):
+    if re.search(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})|%[A-Za-z_][A-Za-z0-9_]*%", v):
+        raise SystemExit(f"{label} contains an unexpanded shell variable: {v!r}; "
+                         "expand it in your shell or pass the literal file path")
+    p = Path(v)
+    try:
+        if p.is_file():
+            return p.read_text(encoding="utf-8")
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"cannot read {label} {v!r}: {e}; pass a readable brief file or inline text")
+    # Explicit path prefixes also cover paths with spaces; bare prose may mention files.
+    pathlike = (v.startswith(("/", "./", "../", "~/", "~\\")) or "\\" in v
+                or re.match(r"^[A-Za-z]:", v)
+                or (not any(c.isspace() for c in v)
+                    and ("/" in v or p.suffix.lower() in (".md", ".markdown", ".txt", ".rst"))))
+    if pathlike:
+        raise SystemExit(f"{label} file {v!r} does not exist or is not a file; "
+                         "create the file or pass inline brief text")
+    return v
 
 
 def read_text_arg(v):
@@ -621,13 +644,13 @@ def main(argv=None):
 
     s = sub.add_parser("assign", help="brief a worker in its own lane")
     s.add_argument("name")
-    s.add_argument("outcome", help="what a person can do or see when it's done (text or a file)")
+    s.add_argument("outcome", help="what a person can do or see when it's done (text or an existing file)")
     s.add_argument("--repo", help="the repo or folder to work in (default: current directory)")
     s.add_argument("--check", help="command that must pass for the work to be accepted")
     s.add_argument("--no-check", metavar="WHY", help="no runnable check; say why")
     s.add_argument("--not-doing", metavar="TEXT", help="what's out of scope")
     s.add_argument("--read", nargs="*", help="files the worker should read first")
-    s.add_argument("--detail", help="extra detail for the brief (text or a file)")
+    s.add_argument("--detail", help="extra detail for the brief (text or an existing file; expand shell variables first)")
     s.add_argument("--size", choices=list(core.SIZES))
     s.add_argument("--timebox", type=int, metavar="MINUTES")
     s.add_argument("--readonly", action="store_true", help="research/review: no lane, no edits")
