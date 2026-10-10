@@ -10,7 +10,7 @@ The loop:
   mrm nudge NAME "correction"                            steer mid-task (lands at its next step)
   mrm scrap NAME [--force]                               throw the lane away
 
-Also: board [--url] | probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
+Also: attach NAME --repo PATH | board [--url] | probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
 The watchdog enforces time boxes and flags ceremony on its own. Every lane ends in accept or scrap.
 assign --auto lets the watchdog accept a clean DONE itself (check passes, in budget, no ceremony);
 those show up under MERGED WHILE YOU WERE AWAY on the next `mrm status`.
@@ -195,8 +195,27 @@ def backlog():
 
 
 def known_repos():
-    return [w["repo"] for w in core.workers().values() if w.get("repo")] + \
-           [h["repo"] for h in core.history() if h.get("repo")]
+    return lifecycle.known_repos()
+
+
+def cmd_attach(a):
+    w = core.worker(a.name)
+    if not w.get("isolated"):
+        raise SystemExit(f"{a.name} is read-only; assign an isolated lane first")
+    # Use Git's main checkout even if PATH points into the secondary worktree.
+    path = lifecycle.repo_top(a.repo)
+    listed = lifecycle.git(path, "worktree", "list", "--porcelain")
+    top = str(Path(next(l[9:] for l in listed.splitlines() if l.startswith("worktree "))).resolve())
+    if lifecycle.same_repo(top, w.get("repo")):
+        raise SystemExit(f"{top} is already {a.name}'s primary repo; attach a different repo")
+    attached = list(dict.fromkeys(w.get("secondary_repos", []) + [top]))
+    candidate = dict(w, secondary_repos=attached)
+    if not any(lifecycle.same_repo(s["repo"], top) and s["workdir"]
+               for s in lifecycle.secondaries(a.name, candidate)):
+        raise SystemExit(f"no secondary worktree for {a.name} in {top}; create one on "
+                         f"worker/{a.name} or worker/{a.name}-<suffix>, then attach again")
+    core.save_worker(a.name, secondary_repos=attached)
+    print(f"{a.name}: attached {top}; accept or scrap includes its secondary worktrees")
 
 
 # ------------------------------------------------------------------------------ status
@@ -542,6 +561,11 @@ def cmd_scrap(a):
     except SystemExit:
         pass
     if w.get("isolated"):
+        if not a.force and lifecycle.git(w["repo"], "branch", "--list", f"worker/{a.name}") and \
+                lifecycle.ahead(w["repo"], w["base"], f"worker/{a.name}"):
+            raise lifecycle.LifecycleError(f"worker/{a.name} has unmerged commits; "
+                                           f"scrap {a.name} --force to throw them away, or accept")
+        lifecycle.discard_secondaries(a.name, w, force=a.force)
         lanes.kill_lane_processes(w["workdir"], w.get("port_base"), w.get("port_count") or 0, name=a.name)
         lifecycle.discard(w, a.name, force=a.force)
         lanes.close_lane(a.name, w, lanes.profile(w["repo"]))
@@ -713,6 +737,8 @@ def main(argv=None):
     s = sub.add_parser("diff"); s.add_argument("name"); s.add_argument("--stat", action="store_true"); s.set_defaults(fn=cmd_diff)
     s = sub.add_parser("gc", help="audit lanes left on disk"); s.add_argument("--clean", action="store_true")
     s.add_argument("--repo"); s.set_defaults(fn=cmd_gc)
+    s = sub.add_parser("attach", help="register a lane's secondary worktrees in another repo")
+    s.add_argument("name"); s.add_argument("--repo", required=True); s.set_defaults(fn=cmd_attach)
     sub.add_parser("usage", help="quota on each account").set_defaults(fn=cmd_usage)
     s = sub.add_parser("park", help="keep a finished lane on purpose, off NEEDS YOU"); s.add_argument("name")
     s.add_argument("why", nargs="*"); s.add_argument("--undo", action="store_true"); s.set_defaults(fn=cmd_park)

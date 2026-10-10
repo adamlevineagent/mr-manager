@@ -88,7 +88,18 @@ mrm scrap NAME                                      # throw the lane away
 
 Also: `mrm probe [ACCOUNT]` (a tiny real turn for one or all accounts, without the daemon; shows the CLI,
 version and actual error on failure), `park NAME [why]` (keep a finished lane on purpose, off NEEDS YOU; `--undo`), `check NAME [CMD]`, `tail NAME -f`, `read NAME`, `diff NAME`, `history [NAME]`, `usage`,
-`gc [--clean]`, `account add|list|remove`, `config`.
+`gc [--clean]`, `attach NAME --repo PATH`, `account add|list|remove`, `config`.
+
+A lane can work in another repo too: create a worktree there on `worker/NAME` or
+`worker/NAME-<suffix>`, then run `mrm attach NAME --repo PATH` (the main repo or its
+worktree path). This registers the repo; matching secondary worktrees in repos already
+known to mr-manager are discovered automatically. Exact lane names take priority over
+suffix matches. `gc` treats these as active, `accept` merges them into that repo's
+checked-out branch and removes them, and `scrap` removes them with the parent lane.
+Commit work in every repo first, or use `accept --commit`; `scrap --force` is required
+to throw away unmerged or uncommitted secondary work. Check out the intended destination
+branch in each secondary repo before accepting. Merges across repos are sequential;
+if one fails, resolve the reported problem and accept again (earlier merges stay landed).
 
 Assignment options: `--not-doing` (scope), `--read FILE...` (read first), `--detail` (more brief),
 `--size small|medium|large`, `--timebox MIN`, `--readonly` (research/review, no lane),
