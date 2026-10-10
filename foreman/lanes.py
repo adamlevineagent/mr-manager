@@ -20,6 +20,7 @@ import os
 import posixpath
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -31,6 +32,32 @@ except ImportError:  # Python < 3.11
     tomllib = None
 
 PORT_FLOOR = 20000
+GB = 1_000_000_000
+
+
+def disk_usage(paths):
+    """Total file bytes in these lanes, excluding symlinks and Windows junctions.
+
+    Missing or unreadable files are skipped: a worker can change files during the walk.
+    lstat's reparse flag also catches junctions on Python 3.11, before isjunction existed.
+    """
+    total = 0
+    pending = [Path(p) for p in paths]
+    while pending:
+        path = pending.pop()
+        try:
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode) or \
+                    getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                with os.scandir(path) as entries:
+                    pending.extend(Path(e.path) for e in entries)
+            elif stat.S_ISREG(info.st_mode):
+                total += info.st_size
+        except OSError:
+            continue
+    return total
 
 # File names that usually mean ceremony rather than the deliverable (unless the brief asked).
 CEREMONY = re.compile(r"(harness|ledger|receipt|evidence|audit|attest|proof|instrument|telemetry|"
