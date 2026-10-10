@@ -185,8 +185,13 @@ def lane_sizes(ws):
 
 def print_lane_disk_usage(ws):
     sizes = lane_sizes(ws)
+    if not sizes:
+        return
+    if not any(w.get("disk_bytes") is not None for w in ws.values() if w.get("isolated")):
+        print("lanes on disk: measuring…")
+        return
     total = sum(size for _, size in sizes)
-    biggest = f" ({sizes[0][0]} {sizes[0][1] / lanes.GB:.1f} GB)" if sizes else ""
+    biggest = f" ({sizes[0][0]} {sizes[0][1] / lanes.GB:.1f} GB)"
     print(f"lanes on disk: {total / lanes.GB:.1f} GB{biggest}")
 
 
@@ -228,7 +233,6 @@ def cmd_status(a):
     merged_while_away()
     if not ws:
         print("no workers. Assign one: mrm assign NAME \"outcome\" --repo PATH --check \"CMD\"")
-        print_lane_disk_usage(ws)
         return
     needs, working, other, parked = [], [], [], []
     for name, w in ws.items():

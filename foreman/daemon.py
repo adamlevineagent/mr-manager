@@ -74,14 +74,6 @@ class Daemon:
     def tick(self):
         now = time.time()
         for name, w in core.workers().items():
-            # Parked and legacy lanes still occupy disk, even when their threads aren't watched.
-            if w.get("isolated") and w.get("workdir") and now - w.get("disk_checked", 0) >= DISK_INTERVAL:
-                size = lanes.disk_usage([w["workdir"]])
-                with core.registry_lock():
-                    ws = core.workers()
-                    if name in ws and ws[name].get("workdir") == w["workdir"]:
-                        ws[name].update(disk_bytes=size, disk_checked=time.time())
-                        core.save_json("workers.json", ws)
             if w.get("legacy") or w["account"] not in core.config()["accounts"] or name in self.accepting \
                     or w.get("state") == "parked":
                 continue
@@ -102,6 +94,28 @@ class Daemon:
                 upd = {}
             if upd:
                 core.save_worker(name, **upd)
+
+    def watch_disk(self):
+        """One sizing thread: slow file walks never hold up the watchdog."""
+        while True:
+            try:
+                self.size_lanes()
+            except (Exception, SystemExit):
+                traceback.print_exc()
+            time.sleep(TICK)
+
+    def size_lanes(self):
+        for name, w in core.workers().items():
+            # Parked and legacy lanes still occupy disk, even when their threads aren't watched.
+            if not w.get("isolated") or not w.get("workdir") or \
+                    time.time() - (w.get("disk_checked") or 0) < DISK_INTERVAL:
+                continue
+            size = lanes.disk_usage([w["workdir"]])
+            with core.registry_lock():
+                ws = core.workers()
+                if name in ws and ws[name].get("workdir") == w["workdir"]:
+                    ws[name].update(disk_bytes=size, disk_checked=time.time())
+                    core.save_json("workers.json", ws)
 
     def adopted(self, name, w, st):
         """Lanes started by an older version: tracked on the board, never woken, nudged or auto-merged.
@@ -296,6 +310,7 @@ class Daemon:
         srv = ThreadingHTTPServer(("127.0.0.1", core.PORT), H)
         srv.daemon_threads = True
         threading.Thread(target=self.watch, daemon=True, name="watchdog").start()
+        threading.Thread(target=self.watch_disk, daemon=True, name="disk-sizing").start()
         log(f"mr-manager daemon on 127.0.0.1:{core.PORT}; home {core.HOME}")
         srv.serve_forever()
 
