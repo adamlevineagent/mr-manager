@@ -120,8 +120,8 @@ def cmd_slot(a):
     raise SystemExit(run(a.name, a.command))
 
 
-def print_status():
-    for name, entry in snapshot().items():
+def print_status(data=None):
+    for name, entry in (snapshot() if data is None else data).items():
         pids = ", ".join(str(h["child_pid"] or h["pid"]) for h in entry["holders"]) or "none"
         print(f"slot {name}: {len(entry['holders'])}/{entry['capacity']} holders "
               f"(PID {pids}), {entry['queued']} queued")

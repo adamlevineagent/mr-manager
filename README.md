@@ -50,6 +50,29 @@ installing anything. It then puts `mrm` on your PATH, installs the Claude Code
 skill, runs the daemon as a background service (Task Scheduler, launchd or systemd), and proves it
 end to end: a real worker does a tiny task in a scratch repo and gets checked and merged.
 
+## Status board
+
+Run `mrm board` to open a live train-station split-flap board in a small app window
+(Edge or Chrome on Windows, Chrome on macOS, your browser on Linux). It starts the
+daemon if needed. `mrm board --url` prints its local URL without opening a window.
+The self-contained page polls every three seconds, shows lanes needing attention
+first, highlights time boxes, and keeps recent arrivals below the departures.
+Sound is off by default; the page respects reduced-motion preferences.
+
+To also display an older local foreman crew, add a `watch` list to your mrm config
+(`mrm config watch` shows it; it defaults to an empty list):
+
+```json
+"watch": [
+  {"label": "foreman", "registry": "~/.codex-foreman/workers.json", "daemon": "http://127.0.0.1:8777"}
+]
+```
+
+These lanes appear in a separate section with source and repo tags. Their registry
+is only read. The board calls only that daemon's `status` method, caches replies
+for about five seconds, and shows `?` when it cannot answer within one second.
+Watched lanes are display only; they never receive management or auto-merge actions.
+
 ## The loop
 
 ```
@@ -80,7 +103,8 @@ Capacities must be positive integers; unlisted names have capacity 1. All repos 
 lanes must use the same mrm home (`MRM_HOME` overrides it) to share the machine's queue.
 Tickets live in `slots.sqlite3` there; dead waiters and holders are pruned by PID on
 admission and status. If a wrapper dies while its command is still running, that
-command keeps its seat until it exits. `mrm status` shows live holders and queue lengths.
+command keeps its seat until it exits. `mrm status` and the `slots` field in `/board.json`
+show live holders and queue lengths.
 Capacity changes apply to new invocations; let existing invocations finish before
 changing a resource's budget. Wrap the full resource-consuming command, including
 any waits, and do not launch detached work from it.
@@ -88,6 +112,13 @@ any waits, and do not launch detached work from it.
 Assignment options: `--not-doing` (scope), `--read FILE...` (read first), `--detail` (more brief),
 `--size small|medium|large`, `--timebox MIN`, `--readonly` (research/review, no lane),
 `--account`, `--model`, `--effort`.
+
+The outcome and `--detail` accept inline text or an existing UTF-8 file. Before creating a lane
+or contacting an account, `assign` refuses unexpanded shell variables (`$n`, `${lane}`, `%LANE%`)
+and missing file paths. Paths include absolute paths, `./` or `../` paths, backslash paths, and
+single words containing `/` or ending in `.md`, `.markdown`, `.txt`, or `.rst`. For paths with
+spaces, use an absolute path or a `./` prefix. Expand variables in your shell or pass a literal
+path to an existing file.
 
 ## Per-repo profile: `.mrm.toml`
 
@@ -102,10 +133,20 @@ size = "large"                 # small | medium | large
 check_timeout = 7200           # seconds the check may take (default 3600), e.g. when builds queue on a lock
 max_lanes = 4                  # at most this many lanes at once in this repo (laptops, shared build locks)
 exclude = ["audits/*observation*/"]   # left out of each lane's checkout (big recorded artifacts); merges unaffected
+on_close = ["docker compose -p {lane} down"]   # optional cleanup commands on accept or scrap
 
 [mrm.env]                      # extra environment for workers; {repo} = the main checkout
 APP_ENV = "test"
 ```
+
+Every lane gets `MRM_SCRATCH`, a private folder at `<MRM_HOME>/scratch/<lane>` outside
+its worktree (default home: `~/.mr-manager`). Put disposable builds, caches and temp files
+there; `accept` and `scrap` delete it. Workers receive this path in their environment and brief.
+Profile `on_close` commands run in the main repo with the lane environment, substituting
+`{lane}` with its name and `{repo}` with the main checkout path. Quote placeholders when
+used as paths. Each command has a 60-second timeout; failures are reported, remaining commands
+and scratch cleanup still run. A locked scratch folder is queued for the daemon or `mrm gc`
+to retry. A refused accept or scrap keeps the lane's scratch and does not run its hooks.
 
 ## On macOS
 

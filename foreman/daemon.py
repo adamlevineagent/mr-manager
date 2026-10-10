@@ -16,10 +16,11 @@ import threading
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from . import brief as briefs
 from . import accept as acc
-from . import core, lanes, lifecycle
+from . import core, lanes, lifecycle, board
 
 TICK = 20
 DISK_INTERVAL = 180
@@ -112,6 +113,7 @@ class Daemon:
         while True:
             try:
                 self.size_lanes()
+                board.size_watched_lanes()
             except (Exception, SystemExit):
                 traceback.print_exc()
             time.sleep(TICK)
@@ -289,6 +291,34 @@ class Daemon:
             event(name, "finished", report_kind="DONE", note=f"auto-accept stopped: {e}")
 
     # -------------------------------------------------------------------------- http
+    def watch_board(self):
+        counts_at = quota_at = 0
+        while True:
+            try:
+                now = time.time()
+                if now - counts_at >= 30:
+                    board.refresh_counts()
+                    counts_at = now
+                if now - quota_at >= 60:
+                    with self.lock:
+                        hosts = list(self.hosts.items())
+                    for name, host in hosts:
+                        if not host.server or not host.server.alive:
+                            continue
+                        try:
+                            usage = host.server.request("account/rateLimits/read", {}, timeout=1)
+                            limits = usage.get("rateLimits") or usage
+                            primary = limits.get("primary") or {}
+                            board.quotas[name] = {"used": primary.get("usedPercent"),
+                                                 "resets": primary.get("resetsAt"), "at": now}
+                        except Exception:
+                            board.quotas.pop(name, None)
+                    quota_at = now
+                board.board_data()  # Refresh watched-daemon status caches in the background.
+            except Exception:
+                traceback.print_exc()
+            time.sleep(5)
+
     def serve(self):
         d = self
 
@@ -307,6 +337,16 @@ class Daemon:
             def do_GET(self):
                 if self.path == "/health":
                     self._send(200, {"ok": True, "accounts": list(d.hosts), "version": 2})
+                elif self.path == "/board.json":
+                    self._send(200, board.board_data())
+                elif self.path == "/board":
+                    data = Path(__file__).with_name("board.html").read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
                 else:
                     self._send(404, {"error": "no route"})
 
@@ -323,6 +363,7 @@ class Daemon:
         srv.daemon_threads = True
         threading.Thread(target=self.watch, daemon=True, name="watchdog").start()
         threading.Thread(target=self.watch_disk, daemon=True, name="disk-sizing").start()
+        threading.Thread(target=self.watch_board, daemon=True, name="board-cache").start()
         log(f"mr-manager daemon on 127.0.0.1:{core.PORT}; home {core.HOME}")
         srv.serve_forever()
 
