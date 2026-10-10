@@ -72,6 +72,11 @@ def watched_rows(now):
                              elapsed_minutes=round(max(0, (now - since) / 60), 1) if since else None,
                              disk_bytes=disk[0] if disk else None,
                              note=w.get("outcome") or "", account=w.get("account"), flags=[], auto=False))
+    rows.sort(key=lambda r: (0 if r["status"] == "WORKING" else
+                            1 if r["status"] == "IDLE" else 2,
+                            r["elapsed_minutes"] is None,
+                            -(r["elapsed_minutes"] or 0) if r["status"] == "WORKING" else
+                            (r["elapsed_minutes"] or 0), r["name"]))
     return rows
 
 
