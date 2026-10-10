@@ -69,7 +69,7 @@ def accept(name, w, commit=False, check=None, skip_check=False, message=None, fo
             if not ok:
                 raise NotAccepted("check", f"check failed: {check}", out, integrated=behind)
             log(f"check passed: {check}")
-        killed = lanes.kill_lane_processes(w["workdir"], w.get("port_base"), w.get("port_count") or 0)
+        killed = lanes.kill_lane_processes(w["workdir"], w.get("port_base"), w.get("port_count") or 0, name=name)
         if killed:
             log(f"stopped {len(killed)} process(es) still running in the lane")
         try:
