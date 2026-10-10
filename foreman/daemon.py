@@ -22,6 +22,7 @@ from . import accept as acc
 from . import core, lanes
 
 TICK = 20
+DISK_INTERVAL = 180
 AUTO_REJECT_LIMIT = 2
 
 
@@ -73,6 +74,14 @@ class Daemon:
     def tick(self):
         now = time.time()
         for name, w in core.workers().items():
+            # Parked and legacy lanes still occupy disk, even when their threads aren't watched.
+            if w.get("isolated") and w.get("workdir") and now - w.get("disk_checked", 0) >= DISK_INTERVAL:
+                size = lanes.disk_usage([w["workdir"]])
+                with core.registry_lock():
+                    ws = core.workers()
+                    if name in ws and ws[name].get("workdir") == w["workdir"]:
+                        ws[name].update(disk_bytes=size, disk_checked=time.time())
+                        core.save_json("workers.json", ws)
             if w.get("legacy") or w["account"] not in core.config()["accounts"] or name in self.accepting \
                     or w.get("state") == "parked":
                 continue

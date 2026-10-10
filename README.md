@@ -100,6 +100,17 @@ CLI bundled with the ChatGPT desktop app (kept current by the app); set `MRM_COD
 Pause new work while something is wrong (a disk-space guard, say): `mrm config stop_file /path/to/flag`.
 While that file exists, `assign` refuses and shows the file's text as the reason.
 
+Keep new lanes in one folder with `mrm config lanes_dir /path/to/lanes`. They go into
+`/path/to/lanes/<repo folder name>/<lane name>`; the default `""` keeps today's `<repo>-wt/<lane>`
+layout. Existing lanes stay where they are, and `gc` finds both layouts through Git's worktree list.
+
+`mrm status` ends with the total disk use of live lanes and the biggest lane. The daemon caches
+file sizes every three minutes, including idle and parked lanes; shared symlinks and junctions
+are excluded. Set `mrm config max_lanes_gb 100` to refuse new assignments while the cached total
+exceeds 100 GB (1 GB = 1,000,000,000 bytes), with the biggest lanes listed so you can accept or
+scrap them. The default `0` disables the limit. This blocks new work; running lanes can still grow
+between scans.
+
 ## With Claude Code
 
 `setup` installs a skill so Claude Code knows how to run workers: assign with a real check, wait in

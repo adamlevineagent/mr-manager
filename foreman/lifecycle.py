@@ -12,6 +12,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from . import core
+
 
 class LifecycleError(SystemExit):
     pass
@@ -43,7 +45,10 @@ def make_worktree(project, name, exclude=()):
     base = current_branch(top)
     if not base:
         raise LifecycleError(f"{top} is on a detached HEAD; check out the branch workers should merge into")
-    wt = Path(top).parent / f"{Path(top).name}-wt" / name
+    lanes_dir = core.config().get("lanes_dir")
+    folder = Path(lanes_dir).expanduser().absolute() / Path(top).name if lanes_dir else \
+        Path(top).parent / f"{Path(top).name}-wt"
+    wt = folder / name
     branch = f"worker/{name}"
     if wt.exists() or git(top, "branch", "--list", branch):
         raise LifecycleError(f"{wt} or branch {branch} already exists; finish or discard the old worker first "
