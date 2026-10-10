@@ -58,6 +58,8 @@ class Daemon:
                 cfg = core.config()
                 acc = cfg["accounts"][account]
                 self.hosts[account] = self.Headless(acc["home"], mcp_allow=cfg.get("worker_mcp_allow", []),
+                                                    worker_root=core.HOME / "homes",
+                                                    inherit=cfg.get("worker_inherit", []),
                                                     log=lambda *a: log(account, *a))
             return self.hosts[account]
 
@@ -72,6 +74,10 @@ class Daemon:
 
     def tick(self):
         now = time.time()
+        with self.lock:
+            hosts = list(self.hosts.values())
+        for h in hosts:
+            h.sync_auth()
         for name, w in core.workers().items():
             if w.get("legacy") or w["account"] not in core.config()["accounts"] or name in self.accepting \
                     or w.get("state") == "parked":

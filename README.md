@@ -108,9 +108,22 @@ You talk to Claude; Claude manages the crew.
 
 ## How it works
 
-A daemon runs one `codex app-server` per account (lean: the account's MCP servers and notify hooks
-are off for workers), and the CLI talks to it over localhost. Steering uses `turn/steer`, so a
-correction lands in the running turn instead of a queue. State lives in `~/.mr-manager/`.
+A daemon runs one `codex app-server` per account in an isolated `CODEX_HOME` under
+`~/.mr-manager/homes/`, and the CLI talks to it over localhost. The worker home shares the account's
+`auth.json`, synced both ways at startup, around turns and every watchdog tick (20 seconds), so
+desktop and worker token refreshes stay shared. Workers do not inherit the account's `AGENTS.md`,
+memories, skills, prompts or config defaults. Threads started before isolation keep using their
+original account home so they remain readable, steerable and archivable.
+
+To opt in to specific account files or folders, set `worker_inherit` in
+`~/.mr-manager/config.json` (default `[]`), for example
+`"worker_inherit": ["AGENTS.md", "skills", "config.toml"]`. Only top-level names are accepted;
+copies are refreshed when app-server starts, and removing a name removes its inherited copy.
+Restart the daemon after changing this setting. Notify hooks are off; inherited MCP servers
+are off unless listed in `worker_mcp_allow`.
+
+Steering uses `turn/steer`, so a correction lands in the running turn instead of a queue.
+State lives in `~/.mr-manager/`.
 
 Workers run with approvals off and full access inside their lanes. Brief accordingly, and don't
 point them at live services or credentials.
