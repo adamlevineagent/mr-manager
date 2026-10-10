@@ -26,6 +26,13 @@ def git(repo, *args, check=True):
     return r.stdout.strip()
 
 
+def ident(repo):
+    """git -c args so mr-manager's own commits work in a repo with no user identity configured."""
+    if git(repo, "config", "user.email", check=False):
+        return []
+    return ["-c", "user.name=mr-manager", "-c", "user.email=mr-manager@localhost"]
+
+
 def repo_top(path):
     r = subprocess.run(["git", "-C", str(path), "rev-parse", "--show-toplevel"], capture_output=True, text=True)
     if r.returncode:
@@ -80,10 +87,10 @@ def finish(w, name, commit_leftovers=False, message=None):
         if dirty:
             if not commit_leftovers:
                 raise LifecycleError(f"{name}'s worktree has uncommitted changes:\n  " + "\n  ".join(dirty[:20]) +
-                                     "\nAsk the worker to commit (foreman steer), or finish --commit to commit them as-is, "
-                                     "or discard.")
+                                     "\nAsk the worker to commit (mrm nudge), or accept --commit to commit them as-is, "
+                                     "or scrap.")
             git(wt, "add", "-A")
-            git(wt, "commit", "-m", f"{name}: uncommitted work at finish")
+            git(wt, *ident(wt), "commit", "-m", f"{name}: uncommitted work at finish")
     n = ahead(top, base, branch)
     merged = None
     if n:
@@ -92,7 +99,7 @@ def finish(w, name, commit_leftovers=False, message=None):
             if main_dirty:
                 raise LifecycleError(f"the main checkout {top} has uncommitted changes on {base}; "
                                      "commit or stash them, then finish again:\n  " + "\n  ".join(main_dirty[:20]))
-            r = subprocess.run(["git", "-C", top, "merge", "--no-ff", "-m",
+            r = subprocess.run(["git", "-C", top, *ident(top), "merge", "--no-ff", "-m",
                                 message or f"Merge {branch}", branch], capture_output=True, text=True)
             if r.returncode:
                 conflicts = git(top, "diff", "--name-only", "--diff-filter=U", check=False)
@@ -101,7 +108,7 @@ def finish(w, name, commit_leftovers=False, message=None):
                     raise LifecycleError(f"merging {branch} into {base} conflicts in:\n  "
                                          + conflicts.replace("\n", "\n  ") +
                                          f"\nNothing was changed. Have the worker rebase onto {base} "
-                                         f"(foreman steer {name} \"rebase onto {base} and resolve conflicts\"), then finish.")
+                                         f"(mrm reject {name} \"rebase onto {base} and resolve conflicts\"), then accept.")
                 raise LifecycleError(f"merging {branch} into {base} failed (nothing was changed):\n"
                                      f"{(r.stderr or r.stdout).strip()}")
         else:

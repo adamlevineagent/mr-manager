@@ -17,9 +17,13 @@ Repo profile: an optional `.mrm.toml` at the repo root captures project lessons 
     CARGO_TARGET_DIR = "{repo}/../shared-target"
 """
 import os
+import posixpath
 import re
+import signal
 import stat
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 try:
@@ -151,12 +155,34 @@ def ceremony_flags(files, brief):
     return flags
 
 
-def kill_lane_processes(wt, port_base=None, port_count=0):
-    """Stop processes started in the lane: anything whose command line or cwd is inside the
-    worktree, and anything listening on the lane's ports. Returns what was stopped."""
-    wt = str(Path(wt)).lower()
+def posix_lane_pids(name, worktree, ps_text, cwd_text):
+    """Match exact MRM_LANE values and cwd paths in ps eww / lsof -F pn output."""
+    pids = set()
+    lane_env = re.compile(r"(?:^|\s)MRM_LANE=" + re.escape(name) + r"(?:\s|$)")
+    for line in ps_text.splitlines():
+        fields = line.split(None, 1)
+        if len(fields) == 2 and fields[0].isdigit() and lane_env.search(fields[1]):
+            pids.add(int(fields[0]))
+
+    worktree = posixpath.normpath(str(worktree))
+    prefix = worktree.rstrip("/") + "/"
+    pid = None
+    for line in cwd_text.splitlines():
+        if line.startswith("p"):
+            pid = int(line[1:]) if line[1:].isdigit() else None
+        elif line.startswith("n") and pid is not None:
+            cwd = posixpath.normpath(line[1:])
+            if cwd == worktree or cwd.startswith(prefix):
+                pids.add(pid)
+    return sorted(pid for pid in pids if pid > 0)
+
+
+def kill_lane_processes(wt, port_base=None, port_count=0, name=None):
+    """Stop lane processes and port listeners; on POSIX, allow 5s before SIGKILL.
+    Windows keeps its command-line matching and taskkill behavior."""
     killed = []
     if os.name == "nt":
+        wt = str(Path(wt)).lower()
         ps = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.ToLower()"
               f".Contains('{wt.replace(chr(39), chr(39) * 2)}') }} | ForEach-Object {{ $_.ProcessId }}")
         r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True)
@@ -173,17 +199,72 @@ def kill_lane_processes(wt, port_base=None, port_count=0):
             if r.returncode == 0:
                 killed.append(pid)
     else:
-        r = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True)
-        pids = {int(l.split(None, 1)[0]) for l in r.stdout.splitlines() if wt in l.lower()}
+        name = name if name is not None else Path(wt).name
+        wt = str(Path(wt).resolve())
+        r = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True)
+        parents = {}
+        for line in r.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 2 and all(field.isdigit() for field in fields):
+                parents[int(fields[0])] = int(fields[1])
+
+        if sys.platform.startswith("linux"):
+            # /proc gives exact environment entries, and works without lsof installed.
+            ps_rows, cwd_rows = [], []
+            env_entry = os.fsencode(f"MRM_LANE={name}")
+            for pid in parents:
+                try:
+                    if env_entry in Path(f"/proc/{pid}/environ").read_bytes().split(b"\0"):
+                        ps_rows.append(f"{pid} MRM_LANE={name}")
+                except OSError:  # exited or belongs to another user
+                    pass
+                try:
+                    cwd_rows.extend((f"p{pid}", f"n{os.readlink(f'/proc/{pid}/cwd')}"))
+                except OSError:
+                    pass
+            ps_text, cwd_text = "\n".join(ps_rows), "\n".join(cwd_rows)
+        else:
+            r = subprocess.run(["ps", "eww", "-axo", "pid=,command="], capture_output=True, text=True)
+            ps_text = r.stdout
+            r = subprocess.run(["lsof", "-a", "-d", "cwd", "-F", "pn"], capture_output=True, text=True)
+            cwd_text = r.stdout
+        pids = set(posix_lane_pids(name, wt, ps_text, cwd_text))
         if port_base:
             for port in range(port_base, port_base + max(port_count, 1)):
-                r = subprocess.run(["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True)
+                try:
+                    r = subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
+                                       capture_output=True, text=True)
+                except FileNotFoundError:
+                    break
                 pids |= {int(x) for x in r.stdout.split() if x.isdigit()}
-        pids.discard(os.getpid())
-        for pid in pids:
+
+        protected = {os.getpid()}
+        pid = os.getppid()
+        while pid > 0 and pid not in protected:
+            protected.add(pid)
+            pid = parents.get(pid, 0)
+        pids -= protected | {0}
+        remaining = set()
+        for pid in sorted(pids):
             try:
-                os.kill(pid, 15)
+                os.kill(pid, signal.SIGTERM)
                 killed.append(pid)
+                remaining.add(pid)
+            except OSError:
+                pass
+        deadline = time.monotonic() + 5
+        while remaining:
+            for pid in list(remaining):
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    remaining.discard(pid)
+            if not remaining or time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
+        for pid in remaining:
+            try:
+                os.kill(pid, signal.SIGKILL)
             except OSError:
                 pass
     return killed

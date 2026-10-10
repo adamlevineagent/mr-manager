@@ -24,9 +24,7 @@ def integrate_base(name, w, notify_worker=True):
     behind = int(lifecycle.git(wt, "rev-list", "--count", f"HEAD..{base}", check=False) or 0)
     if not behind:
         return 0
-    ident = [] if lifecycle.git(wt, "config", "user.email", check=False) else \
-        ["-c", "user.name=mr-manager", "-c", "user.email=mr-manager@localhost"]
-    r = subprocess.run(["git", "-C", wt, *ident, "merge", "--no-edit", "-m", f"Merge {base} into worker/{name}", base],
+    r = subprocess.run(["git", "-C", wt, *lifecycle.ident(wt), "merge", "--no-edit", "-m", f"Merge {base} into worker/{name}", base],
                        capture_output=True, text=True)
     if r.returncode == 0:
         return behind
@@ -58,7 +56,7 @@ def accept(name, w, commit=False, check=None, skip_check=False, message=None, fo
         raise NotAccepted("dirty", f"{name} has uncommitted changes:\n  " + "\n  ".join(dirty[:15]))
     if dirty:
         lifecycle.git(w["workdir"], "add", "-A")
-        lifecycle.git(w["workdir"], "commit", "-m", f"{name}: uncommitted work at accept")
+        lifecycle.git(w["workdir"], *lifecycle.ident(w["workdir"]), "commit", "-m", f"{name}: uncommitted work at accept")
     with core.merge_lock(w["repo"], waiting=lambda: log("another accept into this repo is running; queued behind it")):
         behind = integrate_base(name, w)
         if behind:
@@ -69,7 +67,7 @@ def accept(name, w, commit=False, check=None, skip_check=False, message=None, fo
             if not ok:
                 raise NotAccepted("check", f"check failed: {check}", out, integrated=behind)
             log(f"check passed: {check}")
-        killed = lanes.kill_lane_processes(w["workdir"], w.get("port_base"), w.get("port_count") or 0)
+        killed = lanes.kill_lane_processes(w["workdir"], w.get("port_base"), w.get("port_count") or 0, name=name)
         if killed:
             log(f"stopped {len(killed)} process(es) still running in the lane")
         try:
