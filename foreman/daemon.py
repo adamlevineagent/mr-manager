@@ -59,6 +59,8 @@ class Daemon:
                 cfg = core.config()
                 acc = cfg["accounts"][account]
                 self.hosts[account] = self.Headless(acc["home"], mcp_allow=cfg.get("worker_mcp_allow", []),
+                                                    worker_root=core.HOME / "homes",
+                                                    inherit=cfg.get("worker_inherit", []),
                                                     log=lambda *a: log(account, *a))
             return self.hosts[account]
 
@@ -73,6 +75,10 @@ class Daemon:
 
     def tick(self):
         now = time.time()
+        with self.lock:
+            hosts = list(self.hosts.values())
+        for h in hosts:
+            h.sync_auth()
         if now - getattr(self, "deletes_tried", 0) > 120:
             self.deletes_tried = now
             try:
