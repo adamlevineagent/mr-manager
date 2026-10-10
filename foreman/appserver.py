@@ -46,9 +46,10 @@ class RpcError(Exception):
 
 
 class AppServer:
-    def __init__(self, exe=None, args=(), client_name="codex-foreman", log=print, env=None):
+    def __init__(self, exe=None, args=(), client_name="codex-foreman", log=print, env=None, cwd=None):
         self.exe = exe or find_codex()
         self.env = env
+        self.cwd = cwd
         self.args = list(args)
         self.client_name = client_name
         self.log = log
@@ -61,16 +62,16 @@ class AppServer:
         self.server_request_handler = None   # fn(method, params) -> result
         self.alive = False
 
-    def start(self):
+    def start(self, timeout=120):
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.proc = subprocess.Popen([self.exe, "app-server", *self.args], stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags,
-                                     env=self.env)
+                                     env=self.env, cwd=self.cwd)
         self.alive = True
         threading.Thread(target=self._reader, daemon=True, name="appserver-out").start()
         threading.Thread(target=self._stderr, daemon=True, name="appserver-err").start()
         r = self.request("initialize", {"clientInfo": {"name": self.client_name, "title": "Codex Foreman", "version": "1.0"},
-                                        "capabilities": {"experimentalApi": True}})
+                                        "capabilities": {"experimentalApi": True}}, timeout=timeout)
         self.notify("initialized", {})
         return r
 
