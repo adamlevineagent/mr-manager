@@ -82,8 +82,8 @@ def ahead(repo, base, branch):
 def finish(w, name, commit_leftovers=False, message=None):
     """Merge the worker's branch into its base, then remove its worktree and branch."""
     top, base, wt = w["repo"], w["base"], w["workdir"]
-    branch = f"worker/{name}"
-    if Path(wt).exists():
+    branch = w.get("branch") or f"worker/{name}"
+    if wt and Path(wt).exists():
         dirty = dirty_files(wt)
         if dirty:
             if not commit_leftovers:
@@ -126,13 +126,57 @@ def finish(w, name, commit_leftovers=False, message=None):
 
 def discard(w, name, force=False):
     top, base, wt = w["repo"], w["base"], w["workdir"]
-    branch = f"worker/{name}"
+    branch = w.get("branch") or f"worker/{name}"
     exists = bool(git(top, "branch", "--list", branch))
     if exists and not force:
         n = ahead(top, base, branch)
         if n:
             raise LifecycleError(f"{branch} has {n} unmerged commit(s). discard --force to throw them away, or finish.")
     cleanup(top, wt, branch, force=True)
+
+
+def known_repos():
+    records = list(core.workers().values()) + core.history()
+    return list(dict.fromkeys(r for w in records for r in
+                             ([w["repo"]] if w.get("repo") else []) + w.get("secondary_repos", [])))
+
+
+def same_repo(a, b):
+    return bool(a and b) and Path(a).resolve() == Path(b).resolve()
+
+
+def owner(top, branch, registry):
+    """Exact lane names win over suffix matches (store-node may itself be a lane)."""
+    name = branch[len("worker/"):]
+    if name in registry:
+        return name
+    matches = [n for n, w in registry.items() if w.get("isolated") and name.startswith(n + "-")
+               and not same_repo(top, w.get("repo"))]
+    return max(matches, key=len) if matches else None
+
+
+def secondaries(name, w):
+    """Find owned branches in repos mr-manager knows, including explicitly attached repos."""
+    registry = dict(core.workers(), **{name: w})
+    repos = known_repos() + w.get("secondary_repos", [])
+    return [dict(repo=f["repo"], base=f["base"], workdir=f["worktree"] or "", branch=f["branch"])
+            for f in audit(repos, registry)
+            if f.get("owner") == name and not same_repo(f["repo"], w.get("repo"))]
+
+
+def discard_secondaries(name, w, force=False):
+    from . import lanes
+    owned = secondaries(name, w)
+    # Refuse before removing anything when another repo still has valuable work.
+    for s in owned:
+        if not force and (ahead(s["repo"], s["base"], s["branch"]) or
+                          (s["workdir"] and Path(s["workdir"]).exists() and dirty_files(s["workdir"]))):
+            raise LifecycleError(f"{s['branch']} in {s['repo']} has unmerged or uncommitted work; "
+                                 f"scrap {name} --force to throw it away, or accept")
+    for s in owned:
+        if s["workdir"]:
+            lanes.kill_lane_processes(s["workdir"], None, 0, name=name)
+        discard(s, name, force=force)
 
 
 def unlink_links(wt):
@@ -160,7 +204,7 @@ def cleanup(top, wt, branch, force):
     """Remove the lane's worktree and branch. Returns a folder that couldn't be deleted yet (Windows locks a
     directory while any process has it as its cwd); it's queued and removed later by the daemon or `mrm gc`."""
     pending = None
-    if Path(wt).exists():
+    if wt and Path(wt).exists():
         unlink_links(wt)
         for attempt in range(3):
             r = subprocess.run(["git", "-C", str(top), "worktree", "remove", *(["--force"] if force else []), str(wt)],
@@ -215,7 +259,7 @@ def retry_deletes():
 def audit(repos, registry):
     """Every worker worktree/branch in these repos, classified. Returns a list of findings."""
     out = []
-    for top in sorted(set(repos)):
+    for top in sorted({str(Path(r).resolve()) for r in repos}):
         if not Path(top).exists():
             continue
         wts = {}
@@ -231,15 +275,21 @@ def audit(repos, registry):
         branches = [b.strip("* +").strip() for b in git(top, "branch", "--list", "worker/*", check=False).splitlines()]
         for branch in sorted(set(branches) | set(wts)):
             name = branch[len("worker/"):]
-            w = registry.get(name)
-            base = (w or {}).get("base") or current_branch(top) or "HEAD"
+            owning_name = owner(top, branch, registry)
+            w = registry.get(owning_name)
+            primary = w and same_repo(top, w.get("repo"))
+            base = (w.get("base") if primary else None) or current_branch(top) or "HEAD"
             try:
                 n = ahead(top, base, branch)
             except SystemExit:
                 n = None
             kind = ("active" if w else "orphan")
             if n == 0:
-                kind = "merged-leftover" if not w or w.get("finished") else kind
+                closed = any(owner(top, branch, {h.get("name"): h}) for h in core.history()
+                             if h.get("name") and (same_repo(top, h.get("repo")) or
+                                                    top in h.get("secondary_repos", [])))
+                kind = "merged-leftover" if (w and w.get("finished")) or \
+                    (not w and (branch not in wts or closed)) else kind
             out.append({"repo": top, "name": name, "branch": branch, "worktree": wts.get(branch),
-                        "unmerged": n, "kind": kind, "base": base})
+                        "unmerged": n, "kind": kind, "base": base, "owner": owning_name})
     return out

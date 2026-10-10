@@ -8,6 +8,7 @@ Order matters:
 """
 import subprocess
 import time
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 
 from . import core, lanes, lifecycle
@@ -44,7 +45,8 @@ def integrate_base(name, w, notify_worker=True):
                          **({"auto": False, "auto_off": f"resolved a merge conflict with {base}; review it"}
                             if w.get("auto") else {}))
     raise NotAccepted("conflict", f"{base} moved on and conflicts with {name} in: {files}. "
-                                  f"The worker has been asked to resolve it.")
+                      + ("The worker has been asked to resolve it." if notify_worker else
+                         f"Merge {base} in {wt}, resolve and commit, then accept {name} again."))
 
 
 def accept(name, w, commit=False, check=None, skip_check=False, message=None, force=False, log=print):
@@ -57,6 +59,7 @@ def accept(name, w, commit=False, check=None, skip_check=False, message=None, fo
                 lifecycle.ahead(w["repo"], w["base"], branch):
             raise NotAccepted("merge", f"{name}'s worktree is gone but {branch} has unmerged commits. "
                                        f"Merge it by hand (git merge {branch}), or scrap --force to drop them.")
+        merge_secondaries(name, w, commit=commit, log=log)
         pending = lifecycle.cleanup(w["repo"], w["workdir"], branch, force=False)
         lanes.close_lane(name, w, lanes.profile(w["repo"]), log=log)
         return {"merged_commits": 0, "base": w["base"], "head": None, "cleanup_pending": pending}
@@ -69,7 +72,12 @@ def accept(name, w, commit=False, check=None, skip_check=False, message=None, fo
     if dirty:
         lifecycle.git(w["workdir"], "add", "-A")
         lifecycle.git(w["workdir"], *lifecycle.ident(w["workdir"]), "commit", "-m", f"{name}: uncommitted work at accept")
-    with core.merge_lock(w["repo"], waiting=lambda: log("another accept into this repo is running; queued behind it")):
+    secondary = prepare_secondaries(name, w, commit=commit)
+    # Cross-repo lanes take locks in the same order, so two accepts cannot deadlock.
+    with ExitStack() as locks:
+        for repo in sorted({str(Path(r).resolve()) for r in [w["repo"]] + [s["repo"] for s in secondary]}):
+            locks.enter_context(core.merge_lock(repo, waiting=lambda: log(
+                "another accept into this repo is running; queued behind it")))
         behind = integrate_base(name, w)
         if behind:
             log(f"brought {behind} newer commit(s) from {w['base']} into the lane before checking")
@@ -83,11 +91,48 @@ def accept(name, w, commit=False, check=None, skip_check=False, message=None, fo
         if killed:
             log(f"stopped {len(killed)} process(es) still running in the lane")
         try:
+            merge_secondaries(name, w, commit=commit, log=log, locked=True)
             result = lifecycle.finish(w, name, message=message or f"Merge worker/{name}: {w.get('outcome', '')[:60]}")
         except lifecycle.LifecycleError as e:
             raise NotAccepted("merge", str(e))
         lanes.close_lane(name, w, lanes.profile(w["repo"]), log=log)
         return result
+
+
+def prepare_secondaries(name, w, commit=False):
+    owned = lifecycle.secondaries(name, w)
+    for s in owned:
+        if not s["base"] or s["base"] == "HEAD" or s["base"].startswith("worker/"):
+            raise NotAccepted("merge", f"{s['repo']} needs its destination branch checked out; "
+                              f"check out main (or the intended base), then accept {name} again")
+        if s["workdir"] and Path(s["workdir"]).exists():
+            dirty = lifecycle.dirty_files(s["workdir"])
+            if dirty and not commit:
+                raise NotAccepted("dirty", f"{s['branch']} in {s['workdir']} has uncommitted changes:\n  "
+                                  + "\n  ".join(dirty[:15]))
+    for s in owned:
+        if commit and s["workdir"] and Path(s["workdir"]).exists() and lifecycle.dirty_files(s["workdir"]):
+            lifecycle.git(s["workdir"], "add", "-A")
+            lifecycle.git(s["workdir"], *lifecycle.ident(s["workdir"]), "commit", "-m",
+                          f"{name}: uncommitted secondary work at accept")
+    return owned
+
+
+def merge_secondaries(name, w, commit=False, log=print, locked=False):
+    """Merge owned secondary branches into each repo's checked-out base, then clean up."""
+    results = []
+    for s in prepare_secondaries(name, w, commit=commit):
+        try:
+            with nullcontext() if locked else core.merge_lock(s["repo"]):
+                if s["workdir"] and Path(s["workdir"]).exists():
+                    integrate_base(name, s, notify_worker=False)
+                    lanes.kill_lane_processes(s["workdir"], None, 0, name=name)
+                r = lifecycle.finish(s, name)
+                results.append(r)
+                log(f"{s['branch']}: merged {r['merged_commits']} commit(s) into {s['base']} in {s['repo']}")
+        except lifecycle.LifecycleError as e:
+            raise NotAccepted("merge", str(e))
+    return results
 
 
 def close(name, w, result, extra=None):
