@@ -11,7 +11,7 @@ TEMPLATE = (Path(__file__).resolve().parent.parent / "BRIEF-TEMPLATE.md")
 
 
 def build(name, outcome, where, check=None, out_of_scope=None, context=None, timebox=None, size=None,
-          readonly=False, lane=None, notes=None, branch=None, base=None):
+          readonly=False, lane=None, notes=None, branch=None, base=None, plan_first=False):
     parts = [f"## Your assignment: {name}", "", f"**Outcome:** {outcome.strip()}", ""]
     if readonly:
         parts += [f"**Where:** `{where}`. This is read-only work: don't edit, create or delete files, "
@@ -40,6 +40,12 @@ def build(name, outcome, where, check=None, out_of_scope=None, context=None, tim
         parts += [f"**Notes for this repo:** {notes.strip()}", ""]
     if context:
         parts += ["**Read first:**"] + [f"- `{c}`" for c in context] + [""]
+    if plan_first:
+        parts += ["## Plan first", "",
+                  "First investigate the task and the owner's standing rules. Reply with a message starting "
+                  "PLAN: what you will change and why, the files involved, how you will verify it, and risks. "
+                  "Make no code changes yet. Stop and wait until the manager reviews your plan and tells you "
+                  "to build. This PLAN replaces the final report for this turn; the time box starts at approval.", ""]
     body = "\n".join(parts).strip()
     rules = TEMPLATE.read_text(encoding="utf-8") if TEMPLATE.exists() else "{brief}"
     return rules.replace("{brief}", body)

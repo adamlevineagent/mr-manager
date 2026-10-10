@@ -39,7 +39,7 @@ def event(name, kind, **data):
 
 def report_kind(text):
     head = (text or "").strip().lstrip("-*• ").upper()
-    for k in ("DONE", "PARTIAL", "BLOCKED"):
+    for k in ("PLAN", "DONE", "PARTIAL", "BLOCKED"):
         if head.startswith(k) or head.startswith(f"**{k}"):
             return k
     return None
@@ -162,7 +162,7 @@ class Daemon:
     def while_running(self, name, w, h, now):
         upd = {"state": "working"} if w.get("state") != "working" else {}
         started = w.get("clock_from") or w.get("started") or now
-        box = w.get("timebox")
+        box = None if w.get("plan_first") and not w.get("plan_approved") else w.get("timebox")
         if box and not w.get("wrapup_sent") and now - started > box * 60:
             h.send(w["thread"], briefs.wrapup_order(box), env=w.get("env"))
             upd["wrapup_sent"] = now
@@ -208,7 +208,10 @@ class Daemon:
             except Exception:
                 message = ""
         kind = report_kind(message)
-        upd = dict(state="idle", report=(message or "")[:4000], report_kind=kind, waiting_since=now, resumed=0)
+        upd = dict(state="idle", report=(message or "") if kind == "PLAN" else (message or "")[:4000],
+                   report_kind=kind, waiting_since=now, resumed=0)
+        if kind == "PLAN":
+            upd["plan_text"] = message or ""
         if w.get("auto_off"):
             upd["auto_note"] = w["auto_off"]
         if w.get("auto") and w.get("isolated"):
@@ -228,6 +231,8 @@ class Daemon:
 
     def auto_blocker(self, w, kind):
         """Why this lane needs the manager's eyes instead of an automatic merge (None = it doesn't)."""
+        if w.get("plan_first") and not w.get("plan_approved"):
+            return "waiting for plan approval"
         if kind != "DONE":
             return f"reported {kind or 'no status'}"
         try:
