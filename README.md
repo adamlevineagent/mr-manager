@@ -1,0 +1,103 @@
+# mr-manager
+
+**Tired of ChatGPT wrapping your project in safety tape without delivering results? Let Opus keep
+those dudes in line and delivering like the stallions they were meant to be.**
+
+`mrm` turns OpenAI Codex into a crew of workers that a manager (you, or better, Claude Code) runs
+like a lead engineer: a clear outcome, a check that must pass, a time box, and a merge at the end.
+Codex workers are capable but drift. They build test harnesses, audit ledgers and "verification
+frameworks" instead of the thing, stall waiting for permission, and leave half-merged branches
+everywhere. mr-manager is opinionated about all of that, so you don't have to be.
+
+```
+mrm assign fix-neg "calc eval \"-(2+3)*2\" prints -10" --check "pytest -q" --auto
+mrm status
+```
+
+## What it decides for you
+
+- **Every assignment has a check.** `assign` refuses without a command that must pass (or an
+  explicit `--no-check "why"`). The check is the contract, and it runs on what will actually land.
+- **Every worker gets its own lane:** a git worktree on `worker/NAME`, its own block of ports,
+  its own environment, and shared folders linked in. Parallel workers never collide.
+- **Every lane ends in `accept` or `scrap`.** `accept` merges the base into the lane, runs the
+  check on that combined state, merges, removes the worktree and branch, kills leftover lane
+  processes and archives the thread. New work is refused while leftovers exist.
+- **Workers are briefed to deliver, not perform.** A standing brief tells them to build the
+  outcome, take the smallest path, not stall, stay in their lane, and end with a four-line report.
+- **A watchdog enforces it while nobody's looking.** At the time box it orders a wrap-up, and at
+  1.5× the box it orders a stop. It nudges when harness/ledger/audit-style files appear, and it
+  records how long each finished worker has waited on you.
+- **Auto-accept when you trust the check.** With `--auto`, a clean DONE (in budget, no ceremony,
+  check passes) merges itself. A failing check goes back to the worker with the output, twice, before
+  it escalates to you. `mrm status` lists what merged while you were away.
+- **It survives restarts.** Lanes cut off mid-turn are told to pick up where they left off.
+- **Merges are queued per repo,** so parallel accepts can't race the index or skip each other's
+  changes.
+- **Multiple accounts.** Add more Codex accounts. `assign` picks the one with the most headroom.
+
+## Setup
+
+Needs Python 3.11+, git and the Codex CLI (`npm i -g @openai/codex`), signed in.
+
+```
+git clone https://github.com/adamlevineagent/mr-manager
+python mr-manager/mrm.py setup
+```
+
+`setup` checks prerequisites, signs in accounts, puts `mrm` on your PATH, installs the Claude Code
+skill, runs the daemon as a background service (Task Scheduler, launchd or systemd), and proves it
+end to end: a real worker does a tiny task in a scratch repo and gets checked and merged.
+
+## The loop
+
+```
+mrm assign NAME "outcome" --repo PATH --check "CMD"   # brief a worker in its own lane
+mrm wait                                            # until a worker needs you
+mrm status                                          # NEEDS YOU / WORKING / MERGED WHILE YOU WERE AWAY
+mrm review NAME                                     # report, check, diff, flags
+mrm accept NAME                                     # integrate -> check -> merge -> clean up
+mrm reject NAME "what's wrong"                      # send it back; its time box restarts
+mrm nudge NAME "correction"                         # steer mid-turn (lands at its next step)
+mrm scrap NAME                                      # throw the lane away
+```
+
+Also: `park NAME [why]` (keep a finished lane on purpose, off NEEDS YOU; `--undo`), `check NAME [CMD]`, `tail NAME -f`, `read NAME`, `diff NAME`, `history [NAME]`, `usage`,
+`gc [--clean]`, `account add|list|remove`, `config`.
+
+Assignment options: `--not-doing` (scope), `--read FILE...` (read first), `--detail` (more brief),
+`--size small|medium|large`, `--timebox MIN`, `--readonly` (research/review, no lane),
+`--account`, `--model`, `--effort`.
+
+## Per-repo profile: `.mrm.toml`
+
+```toml
+[mrm]
+check = "pytest -q"            # default check for this repo
+ports = 10                     # ports per lane ($MRM_PORT_BASE, $PORT)
+share = ["node_modules"]       # folders linked into every lane instead of rebuilt
+notes = "Use pnpm. Never touch migrations/."
+timebox = 60                   # minutes; default for lanes in this repo (e.g. slow native builds)
+size = "large"                 # small | medium | large
+check_timeout = 7200           # seconds the check may take (default 3600), e.g. when builds queue on a lock
+
+[mrm.env]                      # extra environment for workers; {repo} = the main checkout
+APP_ENV = "test"
+```
+
+## With Claude Code
+
+`setup` installs a skill so Claude Code knows how to run workers: assign with a real check, wait in
+the background, review the diff itself (a passing check isn't a full review), and accept or reject.
+You talk to Claude; Claude manages the crew.
+
+## How it works
+
+A daemon runs one `codex app-server` per account (lean: the account's MCP servers and notify hooks
+are off for workers), and the CLI talks to it over localhost. Steering uses `turn/steer`, so a
+correction lands in the running turn instead of a queue. State lives in `~/.mr-manager/`.
+
+Workers run with approvals off and full access inside their lanes. Brief accordingly, and don't
+point them at live services or credentials.
+
+MIT licensed.
