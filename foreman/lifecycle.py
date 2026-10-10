@@ -10,6 +10,7 @@ moved main checkout is refused with the exact reason.
 """
 import os
 import subprocess
+import time
 from pathlib import Path
 
 from . import core
@@ -118,8 +119,9 @@ def finish(w, name, commit_leftovers=False, message=None):
                 raise LifecycleError(f"{top} is on {current_branch(top) or 'a detached HEAD'}, not {base}, and {branch} "
                                      f"isn't a fast-forward of {base}. Check out {base} in {top}, then finish again.")
         merged = git(top, "rev-parse", "--short", base)
-    cleanup(top, wt, branch, force=False)
-    return {"merged_commits": n, "base": base, "head": merged}
+    # The merge has landed: from here on, a folder that won't delete yet is queued, never a failure.
+    pending = cleanup(top, wt, branch, force=False)
+    return {"merged_commits": n, "base": base, "head": merged, "cleanup_pending": pending}
 
 
 def discard(w, name, force=False):
@@ -155,9 +157,24 @@ def unlink_links(wt):
 
 
 def cleanup(top, wt, branch, force):
+    """Remove the lane's worktree and branch. Returns a folder that couldn't be deleted yet (Windows locks a
+    directory while any process has it as its cwd); it's queued and removed later by the daemon or `mrm gc`."""
+    pending = None
     if Path(wt).exists():
         unlink_links(wt)
-        git(top, "worktree", "remove", *(["--force"] if force else []), wt)
+        for attempt in range(3):
+            r = subprocess.run(["git", "-C", str(top), "worktree", "remove", *(["--force"] if force else []), str(wt)],
+                               capture_output=True, text=True)
+            if r.returncode == 0 or not Path(wt).exists():
+                break
+            time.sleep(2)
+        else:
+            git(top, "worktree", "prune", check=False)
+            listed = git(top, "worktree", "list", "--porcelain", check=False)
+            if any(Path(l[9:]) == Path(wt) for l in listed.splitlines() if l.startswith("worktree ")):
+                raise LifecycleError(f"git worktree remove {wt} failed in {top}:\n{(r.stderr or r.stdout).strip()}")
+            pending = str(wt)    # git let go of it; only the folder is left
+            queue_delete(pending)
     if git(top, "branch", "--list", branch):
         git(top, "branch", "-D" if force else "-d", branch)
     git(top, "worktree", "prune", check=False)
@@ -165,6 +182,34 @@ def cleanup(top, wt, branch, force):
         Path(wt).parent.rmdir()
     except OSError:
         pass
+    return pending
+
+
+def queue_delete(path):
+    from . import core
+    q = core.load_json("pending_delete.json", [])
+    if path not in q:
+        core.save_json("pending_delete.json", q + [path])
+
+
+def retry_deletes():
+    """Delete lane folders an accept or scrap couldn't remove at the time. Returns what's still left."""
+    import shutil
+    from . import core
+    left = []
+    for path in core.load_json("pending_delete.json", []):
+        if Path(path).exists():
+            unlink_links(path)
+            shutil.rmtree(path, ignore_errors=True)
+        if Path(path).exists():
+            left.append(path)
+        else:
+            try:
+                Path(path).parent.rmdir()
+            except OSError:
+                pass
+    core.save_json("pending_delete.json", left)
+    return left
 
 
 def audit(repos, registry):

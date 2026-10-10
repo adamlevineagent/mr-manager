@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import brief as briefs
 from . import accept as acc
-from . import core, lanes
+from . import core, lanes, lifecycle
 
 TICK = 20
 DISK_INTERVAL = 180
@@ -73,6 +73,12 @@ class Daemon:
 
     def tick(self):
         now = time.time()
+        if now - getattr(self, "deletes_tried", 0) > 120:
+            self.deletes_tried = now
+            try:
+                lifecycle.retry_deletes()
+            except Exception as e:
+                log("retrying lane folder deletes failed", e)
         for name, w in core.workers().items():
             if w.get("legacy") or w["account"] not in core.config()["accounts"] or name in self.accepting \
                     or w.get("state") == "parked":

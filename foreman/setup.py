@@ -1,6 +1,6 @@
 """`mrm setup`: everything needed, then a real worker as proof.
 
-1. checks: Python, git, the Codex CLI, a signed-in Codex home
+1. checks: Python, git, the Codex CLI, sign-in and a real API turn for every account
 2. puts `mrm` on your PATH
 3. installs the Claude Code skill (so Claude Code knows how to manage workers)
 4. runs the daemon as a supervised background service (restarts on exit, starts at sign-in)
@@ -14,7 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import core
+from . import core, probe
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,10 +30,12 @@ def run(a):
     ok &= say(bool(shutil.which("git")), "git" + ("" if shutil.which("git") else " is missing: install git first"))
     from .appserver import find_codex
     exe = find_codex()
-    have_codex = subprocess.run([exe, "--version"], capture_output=True, text=True).returncode == 0 if (
-        Path(exe).exists() or shutil.which(exe)) else False
-    ok &= say(have_codex, f"Codex CLI: {exe}" if have_codex else
-              "Codex CLI not found. Install Codex (npm i -g @openai/codex, or the Codex app), then rerun")
+    try:
+        say(True, f"Codex CLI: {exe} ({probe.cli_version(exe)})")
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        ok = False
+        say(False, f"Codex CLI: {exe}: {error}")
+        print("       hint: install Codex or set MRM_CODEX to another codex")
     if not ok:
         raise SystemExit("\nfix the items marked !! and run mrm setup again")
 
@@ -44,6 +46,8 @@ def run(a):
         if not say(signed, f"account {name}: {home}" + ("" if signed else " is not signed in")):
             print(f"       signing in account {name} (a browser window opens)...")
             subprocess.call([exe, "login"], env=dict(os.environ, CODEX_HOME=str(home)))
+        if not probe.probe_account(name, acc, cfg, exe):
+            raise SystemExit(1)
     core.save_config(cfg)
 
     say(True, "mrm on PATH: " + install_launcher())

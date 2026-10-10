@@ -45,7 +45,8 @@ git clone https://github.com/adamlevineagent/mr-manager
 python mr-manager/mrm.py setup
 ```
 
-`setup` checks prerequisites, signs in accounts, puts `mrm` on your PATH, installs the Claude Code
+`setup` checks prerequisites, signs in accounts and proves each can complete a real API turn before
+installing anything. It then puts `mrm` on your PATH, installs the Claude Code
 skill, runs the daemon as a background service (Task Scheduler, launchd or systemd), and proves it
 end to end: a real worker does a tiny task in a scratch repo and gets checked and merged.
 
@@ -62,7 +63,8 @@ mrm nudge NAME "correction"                         # steer mid-turn (lands at i
 mrm scrap NAME                                      # throw the lane away
 ```
 
-Also: `park NAME [why]` (keep a finished lane on purpose, off NEEDS YOU; `--undo`), `check NAME [CMD]`, `tail NAME -f`, `read NAME`, `diff NAME`, `history [NAME]`, `usage`,
+Also: `mrm probe [ACCOUNT]` (a tiny real turn for one or all accounts, without the daemon; shows the CLI,
+version and actual error on failure), `park NAME [why]` (keep a finished lane on purpose, off NEEDS YOU; `--undo`), `check NAME [CMD]`, `tail NAME -f`, `read NAME`, `diff NAME`, `history [NAME]`, `usage`,
 `gc [--clean]`, `account add|list|remove`, `config`.
 
 Assignment options: `--not-doing` (scope), `--read FILE...` (read first), `--detail` (more brief),

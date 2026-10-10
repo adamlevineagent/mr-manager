@@ -10,7 +10,7 @@ The loop:
   mrm nudge NAME "correction"                            steer mid-task (lands at its next step)
   mrm scrap NAME [--force]                               throw the lane away
 
-Also: tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
+Also: probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
 The watchdog enforces time boxes and flags ceremony on its own. Every lane ends in accept or scrap.
 assign --auto lets the watchdog accept a clean DONE itself (check passes, in budget, no ceremony);
 those show up under MERGED WHILE YOU WERE AWAY on the next `mrm status`.
@@ -482,6 +482,9 @@ def cmd_accept(a):
     close(a.name, w, f"accepted: merged {r['merged_commits']} commit(s) into {r['base']}")
     print(f"{a.name}: merged {r['merged_commits']} commit(s) into {r['base']}"
           + (f" (now {r['head']})" if r.get("head") else "") + "; lane removed, thread archived")
+    if r.get("cleanup_pending"):
+        print(f"  the lane folder is still in use (a shell or editor open in it?), so it's queued for deletion: "
+              f"{r['cleanup_pending']}. The daemon retries; `mrm gc` does too.")
 
 
 def cmd_scrap(a):
@@ -501,9 +504,13 @@ close = acc.close
 
 
 def cmd_gc(a):
+    stuck = lifecycle.retry_deletes()
+    for p in stuck:
+        print(f"still in use, can't delete yet: {p}")
     findings = lifecycle.audit(known_repos() + ([a.repo] if a.repo else []), core.workers())
     if not findings:
-        print("clean: no worker worktrees or branches left anywhere")
+        print("clean: no worker worktrees or branches left anywhere" if not stuck else
+              "no worker worktrees or branches left; the folders above are queued for deletion")
         return
     for f in findings:
         print(f"{f['kind']:<16} {f['branch']:<30} unmerged={f['unmerged']}  {f['worktree'] or '(no worktree)'}")
@@ -601,6 +608,12 @@ def cmd_setup(a):
     setup.run(a)
 
 
+def cmd_probe(a):
+    from . import probe
+    if not probe.run(a.account):
+        raise SystemExit(1)
+
+
 # ------------------------------------------------------------------------------ main
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="mrm", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -661,6 +674,8 @@ def main(argv=None):
     s.set_defaults(fn=cmd_config)
     s = sub.add_parser("setup", help="install everything and run a smoke test")
     s.add_argument("--skip-smoke", action="store_true"); s.set_defaults(fn=cmd_setup)
+    s = sub.add_parser("probe", help="prove each account can complete a real Codex turn (no daemon)")
+    s.add_argument("account", nargs="?"); s.set_defaults(fn=cmd_probe)
     sub.add_parser("daemon", help="run the daemon (normally a background service)").set_defaults(
         fn=lambda a: __import__("foreman.daemon", fromlist=["main"]).main())
 
