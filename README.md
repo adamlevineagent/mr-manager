@@ -88,11 +88,29 @@ mrm scrap NAME                                      # throw the lane away
 
 Also: `mrm probe [ACCOUNT]` (a tiny real turn for one or all accounts, without the daemon; shows the CLI,
 version and actual error on failure), `park NAME [why]` (keep a finished lane on purpose, off NEEDS YOU; `--undo`), `check NAME [CMD]`, `tail NAME -f`, `read NAME`, `diff NAME`, `history [NAME]`, `usage`,
-`gc [--clean]`, `account add|list|remove`, `config`.
+`gc [--clean]`, `attach NAME --repo PATH`, `account add|list|remove`, `config`.
+
+A lane can work in another repo too: create a worktree there on `worker/NAME` or
+`worker/NAME-<suffix>`, then run `mrm attach NAME --repo PATH` (the main repo or its
+worktree path). This registers the repo; matching secondary worktrees in repos already
+known to mr-manager are discovered automatically. Exact lane names take priority over
+suffix matches. `gc` treats these as active, `accept` merges them into that repo's
+checked-out branch and removes them, and `scrap` removes them with the parent lane.
+Commit work in every repo first, or use `accept --commit`; `scrap --force` is required
+to throw away unmerged or uncommitted secondary work. Check out the intended destination
+branch in each secondary repo before accepting. Merges across repos are sequential;
+if one fails, resolve the reported problem and accept again (earlier merges stay landed).
 
 Assignment options: `--not-doing` (scope), `--read FILE...` (read first), `--detail` (more brief),
 `--size small|medium|large`, `--timebox MIN`, `--readonly` (research/review, no lane),
 `--account`, `--model`, `--effort`.
+
+The outcome and `--detail` accept inline text or an existing UTF-8 file. Before creating a lane
+or contacting an account, `assign` refuses unexpanded shell variables (`$n`, `${lane}`, `%LANE%`)
+and missing file paths. Paths include absolute paths, `./` or `../` paths, backslash paths, and
+single words containing `/` or ending in `.md`, `.markdown`, `.txt`, or `.rst`. For paths with
+spaces, use an absolute path or a `./` prefix. Expand variables in your shell or pass a literal
+path to an existing file.
 
 ## Per-repo profile: `.mrm.toml`
 
@@ -107,10 +125,20 @@ size = "large"                 # small | medium | large
 check_timeout = 7200           # seconds the check may take (default 3600), e.g. when builds queue on a lock
 max_lanes = 4                  # at most this many lanes at once in this repo (laptops, shared build locks)
 exclude = ["audits/*observation*/"]   # left out of each lane's checkout (big recorded artifacts); merges unaffected
+on_close = ["docker compose -p {lane} down"]   # optional cleanup commands on accept or scrap
 
 [mrm.env]                      # extra environment for workers; {repo} = the main checkout
 APP_ENV = "test"
 ```
+
+Every lane gets `MRM_SCRATCH`, a private folder at `<MRM_HOME>/scratch/<lane>` outside
+its worktree (default home: `~/.mr-manager`). Put disposable builds, caches and temp files
+there; `accept` and `scrap` delete it. Workers receive this path in their environment and brief.
+Profile `on_close` commands run in the main repo with the lane environment, substituting
+`{lane}` with its name and `{repo}` with the main checkout path. Quote placeholders when
+used as paths. Each command has a 60-second timeout; failures are reported, remaining commands
+and scratch cleanup still run. A locked scratch folder is queued for the daemon or `mrm gc`
+to retry. A refused accept or scrap keeps the lane's scratch and does not run its hooks.
 
 ## On macOS
 

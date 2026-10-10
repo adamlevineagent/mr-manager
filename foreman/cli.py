@@ -10,7 +10,7 @@ The loop:
   mrm nudge NAME "correction"                            steer mid-task (lands at its next step)
   mrm scrap NAME [--force]                               throw the lane away
 
-Also: board [--url] | probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
+Also: attach NAME --repo PATH | board [--url] | probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
 The watchdog enforces time boxes and flags ceremony on its own. Every lane ends in accept or scrap.
 assign --auto lets the watchdog accept a clean DONE itself (check passes, in budget, no ceremony);
 those show up under MERGED WHILE YOU WERE AWAY on the next `mrm status`.
@@ -18,6 +18,7 @@ those show up under MERGED WHILE YOU WERE AWAY on the next `mrm status`.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -84,6 +85,8 @@ def choose_account(explicit=None):
 
 # ------------------------------------------------------------------------------ assign
 def cmd_assign(a):
+    outcome = read_assignment_arg(a.outcome, "brief")
+    detail = read_assignment_arg(a.detail, "--detail") if a.detail else None
     cfg = core.config()
     stop = cfg.get("stop_file")
     if stop and os.path.exists(os.path.expanduser(stop)):
@@ -108,7 +111,6 @@ def cmd_assign(a):
                          "\n".join(f"  {f['kind']:<16} {f['branch']} in {f['repo']}" for f in leftovers) +
                          "\nRun: mrm gc --clean   (removes the merged ones; scrap the rest)")
     d = cfg["defaults"]
-    outcome = read_text_arg(a.outcome)
     repo_path = os.path.abspath(a.repo or os.getcwd())
     in_git = subprocess.run(["git", "-C", repo_path, "rev-parse", "--show-toplevel"], capture_output=True).returncode == 0
     readonly = a.readonly or not in_git
@@ -141,8 +143,8 @@ def cmd_assign(a):
     text = briefs.build(a.name, outcome, workdir, check=check, out_of_scope=a.not_doing,
                         context=a.read, timebox=timebox, size=size, readonly=readonly, lane=lane,
                         notes=prof.get("notes"), branch=branch, base=base)
-    if a.detail:
-        text += "\n\n## More detail from the manager\n\n" + read_text_arg(a.detail)
+    if detail:
+        text += "\n\n## More detail from the manager\n\n" + detail
     env = lanes.lane_env(lane["port_base"], lane["port_count"], prof, a.name) if lane else None
     tid = core.backend(account).create(prompt=text, title=f"mrm · {a.name}", cwd=workdir,
                                        model=a.model or d.get("model"), effort=a.effort or d.get("effort"), env=env)
@@ -154,6 +156,27 @@ def cmd_assign(a):
     where = f"lane {workdir} (branch {branch}, ports {lane['port_base']}+)" if lane else f"{workdir} (read-only)"
     print(f"assigned {a.name} to account {account}: {where}; time box {timebox}m; check: {check or 'none'}"
           + ("; auto-accept on" if a.auto and not readonly else ""))
+
+
+def read_assignment_arg(v, label):
+    if re.search(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[^}]+\})|%[A-Za-z_][A-Za-z0-9_]*%", v):
+        raise SystemExit(f"{label} contains an unexpanded shell variable: {v!r}; "
+                         "expand it in your shell or pass the literal file path")
+    p = Path(v)
+    try:
+        if p.is_file():
+            return p.read_text(encoding="utf-8")
+    except (OSError, ValueError) as e:
+        raise SystemExit(f"cannot read {label} {v!r}: {e}; pass a readable brief file or inline text")
+    # Explicit path prefixes also cover paths with spaces; bare prose may mention files.
+    pathlike = (v.startswith(("/", "./", "../", "~/", "~\\")) or "\\" in v
+                or re.match(r"^[A-Za-z]:", v)
+                or (not any(c.isspace() for c in v)
+                    and ("/" in v or p.suffix.lower() in (".md", ".markdown", ".txt", ".rst"))))
+    if pathlike:
+        raise SystemExit(f"{label} file {v!r} does not exist or is not a file; "
+                         "create the file or pass inline brief text")
+    return v
 
 
 def read_text_arg(v):
@@ -172,8 +195,27 @@ def backlog():
 
 
 def known_repos():
-    return [w["repo"] for w in core.workers().values() if w.get("repo")] + \
-           [h["repo"] for h in core.history() if h.get("repo")]
+    return lifecycle.known_repos()
+
+
+def cmd_attach(a):
+    w = core.worker(a.name)
+    if not w.get("isolated"):
+        raise SystemExit(f"{a.name} is read-only; assign an isolated lane first")
+    # Use Git's main checkout even if PATH points into the secondary worktree.
+    path = lifecycle.repo_top(a.repo)
+    listed = lifecycle.git(path, "worktree", "list", "--porcelain")
+    top = str(Path(next(l[9:] for l in listed.splitlines() if l.startswith("worktree "))).resolve())
+    if lifecycle.same_repo(top, w.get("repo")):
+        raise SystemExit(f"{top} is already {a.name}'s primary repo; attach a different repo")
+    attached = list(dict.fromkeys(w.get("secondary_repos", []) + [top]))
+    candidate = dict(w, secondary_repos=attached)
+    if not any(lifecycle.same_repo(s["repo"], top) and s["workdir"]
+               for s in lifecycle.secondaries(a.name, candidate)):
+        raise SystemExit(f"no secondary worktree for {a.name} in {top}; create one on "
+                         f"worker/{a.name} or worker/{a.name}-<suffix>, then attach again")
+    core.save_worker(a.name, secondary_repos=attached)
+    print(f"{a.name}: attached {top}; accept or scrap includes its secondary worktrees")
 
 
 # ------------------------------------------------------------------------------ status
@@ -519,8 +561,14 @@ def cmd_scrap(a):
     except SystemExit:
         pass
     if w.get("isolated"):
+        if not a.force and lifecycle.git(w["repo"], "branch", "--list", f"worker/{a.name}") and \
+                lifecycle.ahead(w["repo"], w["base"], f"worker/{a.name}"):
+            raise lifecycle.LifecycleError(f"worker/{a.name} has unmerged commits; "
+                                           f"scrap {a.name} --force to throw them away, or accept")
+        lifecycle.discard_secondaries(a.name, w, force=a.force)
         lanes.kill_lane_processes(w["workdir"], w.get("port_base"), w.get("port_count") or 0, name=a.name)
         lifecycle.discard(w, a.name, force=a.force)
+        lanes.close_lane(a.name, w, lanes.profile(w["repo"]))
     close(a.name, w, "scrapped")
     print(f"{a.name}: scrapped" + ("; lane removed" if w.get("isolated") else ""))
 
@@ -646,13 +694,13 @@ def main(argv=None):
 
     s = sub.add_parser("assign", help="brief a worker in its own lane")
     s.add_argument("name")
-    s.add_argument("outcome", help="what a person can do or see when it's done (text or a file)")
+    s.add_argument("outcome", help="what a person can do or see when it's done (text or an existing file)")
     s.add_argument("--repo", help="the repo or folder to work in (default: current directory)")
     s.add_argument("--check", help="command that must pass for the work to be accepted")
     s.add_argument("--no-check", metavar="WHY", help="no runnable check; say why")
     s.add_argument("--not-doing", metavar="TEXT", help="what's out of scope")
     s.add_argument("--read", nargs="*", help="files the worker should read first")
-    s.add_argument("--detail", help="extra detail for the brief (text or a file)")
+    s.add_argument("--detail", help="extra detail for the brief (text or an existing file; expand shell variables first)")
     s.add_argument("--size", choices=list(core.SIZES))
     s.add_argument("--timebox", type=int, metavar="MINUTES")
     s.add_argument("--readonly", action="store_true", help="research/review: no lane, no edits")
@@ -689,6 +737,8 @@ def main(argv=None):
     s = sub.add_parser("diff"); s.add_argument("name"); s.add_argument("--stat", action="store_true"); s.set_defaults(fn=cmd_diff)
     s = sub.add_parser("gc", help="audit lanes left on disk"); s.add_argument("--clean", action="store_true")
     s.add_argument("--repo"); s.set_defaults(fn=cmd_gc)
+    s = sub.add_parser("attach", help="register a lane's secondary worktrees in another repo")
+    s.add_argument("name"); s.add_argument("--repo", required=True); s.set_defaults(fn=cmd_attach)
     sub.add_parser("usage", help="quota on each account").set_defaults(fn=cmd_usage)
     s = sub.add_parser("park", help="keep a finished lane on purpose, off NEEDS YOU"); s.add_argument("name")
     s.add_argument("why", nargs="*"); s.add_argument("--undo", action="store_true"); s.set_defaults(fn=cmd_park)

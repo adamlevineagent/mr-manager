@@ -20,11 +20,14 @@ import os
 import posixpath
 import re
 import signal
+import shutil
 import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+from . import core
 
 try:
     import tomllib
@@ -88,7 +91,53 @@ def lane_env(port_base, port_count, prof, name):
     env = {"MRM_LANE": name, "MRM_PORT_BASE": str(port_base), "MRM_PORT_COUNT": str(port_count),
            "PORT": str(port_base)}
     env.update(prof.get("env") or {})
+    env["MRM_SCRATCH"] = make_scratch(name)
     return env
+
+
+def scratch_path(name):
+    root = (core.HOME / "scratch").resolve()
+    path = (root / name).resolve()
+    if path == root or root not in path.parents:
+        raise SystemExit(f"invalid scratch lane name {name!r}; use a name inside {root}")
+    return path
+
+
+def make_scratch(name):
+    """Create the lane's disposable build/temp folder outside its git worktree."""
+    path = scratch_path(name)
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
+def close_lane(name, w, prof, log=print):
+    """Run repo close hooks, then delete scratch. Cleanup failures never block closing."""
+    failures = []
+    commands = prof.get("on_close") or []
+    if isinstance(commands, str):
+        commands = [commands]
+    env = dict(os.environ, **(w.get("env") or {}))
+    env.update(MRM_LANE=name, MRM_SCRATCH=str(scratch_path(name)))
+    for command in commands:
+        command = native_check(str(command).replace("{lane}", name).replace("{repo}", str(w["repo"])))
+        try:
+            r = subprocess.run(command, shell=True, cwd=w["repo"], env=env,
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            if r.returncode:
+                failures.append(f"on_close failed ({r.returncode}): {command}\n{(r.stdout + r.stderr).strip()[-3000:]}")
+        except (OSError, subprocess.TimeoutExpired) as e:
+            failures.append(f"on_close failed: {command}: {e}")
+    path = scratch_path(name)
+    try:
+        if path.exists():
+            shutil.rmtree(path)
+    except OSError as e:
+        from . import lifecycle
+        lifecycle.queue_delete(str(path))
+        failures.append(f"scratch cleanup failed: {path}: {e}; close files using it, then run mrm gc")
+    for failure in failures:
+        log(f"{name}: {failure}")
+    return failures
 
 
 def link_shared(repo, wt, folders):
