@@ -82,8 +82,9 @@ size = "large"                 # small | medium | large
 check_timeout = 7200           # seconds the check may take (default 3600), e.g. when builds queue on a lock
 max_lanes = 4                  # at most this many lanes at once in this repo (laptops, shared build locks)
 exclude = ["audits/*observation*/"]   # left out of each lane's checkout (big recorded artifacts); merges unaffected
+copy = ["tools/hold.sh"]       # untracked files copied into each lane (tools a sandboxed worker must execute)
 
-[mrm.env]                      # extra environment for workers; {repo} = the main checkout
+[mrm.env]                      # extra environment for workers; {repo} = the main checkout, {lane} = the lane
 APP_ENV = "test"
 ```
 

@@ -53,11 +53,41 @@ def allocate_ports(taken_bases, count):
     return base
 
 
-def lane_env(port_base, port_count, prof, name):
+def lane_env(port_base, port_count, prof, name, workdir=None):
+    """{lane} in a profile env value becomes the lane's worktree path (e.g. a tool copied into the lane)."""
     env = {"MRM_LANE": name, "MRM_PORT_BASE": str(port_base), "MRM_PORT_COUNT": str(port_count),
            "PORT": str(port_base)}
-    env.update(prof.get("env") or {})
+    for k, v in (prof.get("env") or {}).items():
+        env[k] = v.replace("{lane}", str(workdir)) if workdir else v
     return env
+
+
+def copy_in(repo, wt, files):
+    """Copy files (paths relative to the main checkout, not tracked by git) into the lane, keeping their mode,
+    and keep them out of commits through the repo's shared info/exclude. For tools a worker must *execute*:
+    sandboxed workers (Codex workspace-write) can't run files outside their lane, and a symlink resolves
+    outside. Returns what was copied."""
+    import shutil
+    made = []
+    common = subprocess.run(["git", "-C", str(repo), "rev-parse", "--git-common-dir"], capture_output=True,
+                            text=True).stdout.strip()
+    excl = (Path(repo) / common if not os.path.isabs(common) else Path(common)) / "info" / "exclude"
+    for f in files or []:
+        src, dst = Path(repo) / f, Path(wt) / f
+        if not src.is_file():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        made.append(f)
+        try:
+            lines = excl.read_text(encoding="utf-8").splitlines() if excl.exists() else []
+            if f"/{f}" not in lines:
+                excl.parent.mkdir(parents=True, exist_ok=True)
+                with open(excl, "a", encoding="utf-8") as h:
+                    h.write(f"/{f}\n")
+        except OSError:
+            pass
+    return made
 
 
 def link_shared(repo, wt, folders):

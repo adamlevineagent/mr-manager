@@ -129,13 +129,14 @@ def cmd_assign(a):
         taken = {w.get("port_base") for w in core.workers().values() if w.get("port_base")}
         port_base = lanes.allocate_ports(taken, count)
         lanes.link_shared(repo, workdir, prof.get("share"))
+        lanes.copy_in(repo, workdir, prof.get("copy"))
         lane = {"port_base": port_base, "port_count": count}
     text = briefs.build(a.name, outcome, workdir, check=check, out_of_scope=a.not_doing,
                         context=a.read, timebox=timebox, size=size, readonly=readonly, lane=lane,
                         notes=prof.get("notes"), branch=branch, base=base)
     if a.detail:
         text += "\n\n## More detail from the manager\n\n" + read_text_arg(a.detail)
-    env = lanes.lane_env(lane["port_base"], lane["port_count"], prof, a.name) if lane else None
+    env = lanes.lane_env(lane["port_base"], lane["port_count"], prof, a.name, workdir) if lane else None
     tid = core.backend(account).create(prompt=text, title=f"mrm · {a.name}", cwd=workdir,
                                        model=a.model or d.get("model"), effort=a.effort or d.get("effort"), env=env)
     core.save_worker(a.name, account=account, thread=tid, project=repo_path, workdir=workdir, repo=repo, base=base,
