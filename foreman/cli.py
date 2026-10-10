@@ -10,7 +10,7 @@ The loop:
   mrm nudge NAME "correction"                            steer mid-task (lands at its next step)
   mrm scrap NAME [--force]                               throw the lane away
 
-Also: tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
+Also: probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
 The watchdog enforces time boxes and flags ceremony on its own. Every lane ends in accept or scrap.
 assign --auto lets the watchdog accept a clean DONE itself (check passes, in budget, no ceremony);
 those show up under MERGED WHILE YOU WERE AWAY on the next `mrm status`.
@@ -574,6 +574,12 @@ def cmd_setup(a):
     setup.run(a)
 
 
+def cmd_probe(a):
+    from . import probe
+    if not probe.run(a.account):
+        raise SystemExit(1)
+
+
 # ------------------------------------------------------------------------------ main
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="mrm", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -634,6 +640,8 @@ def main(argv=None):
     s.set_defaults(fn=cmd_config)
     s = sub.add_parser("setup", help="install everything and run a smoke test")
     s.add_argument("--skip-smoke", action="store_true"); s.set_defaults(fn=cmd_setup)
+    s = sub.add_parser("probe", help="prove each account can complete a real Codex turn (no daemon)")
+    s.add_argument("account", nargs="?"); s.set_defaults(fn=cmd_probe)
     sub.add_parser("daemon", help="run the daemon (normally a background service)").set_defaults(
         fn=lambda a: __import__("foreman.daemon", fromlist=["main"]).main())
 
