@@ -243,11 +243,14 @@ def ensure_daemon():
         return True
     import subprocess
     import sys
+    # The installed service serves the default home and port only. A dev/test home (MRM_HOME, MRM_PORT) must
+    # never start it, or worse, the legacy foreman task another session may be relying on.
+    service = PORT == 8777 and not (os.environ.get("MRM_HOME") or os.environ.get("FOREMAN_HOME"))
     if os.name == "nt":
-        r = subprocess.run(["schtasks", "/Run", "/TN", "Mr Manager daemon"], capture_output=True)
-        if r.returncode != 0:
+        r = subprocess.run(["schtasks", "/Run", "/TN", "Mr Manager daemon"], capture_output=True) if service else None
+        if service and r.returncode != 0:
             r = subprocess.run(["schtasks", "/Run", "/TN", "Codex Foreman daemon"], capture_output=True)
-        if r.returncode != 0:
+        if r is None or r.returncode != 0:
             flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
             subprocess.Popen([sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent.parent / "mrm.py"),
                               "daemon"], creationflags=flags, close_fds=True)
