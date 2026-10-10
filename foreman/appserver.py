@@ -12,10 +12,30 @@ def find_codex():
     override = os.environ.get("MRM_CODEX")
     if override:
         return override
-    base = Path(os.environ.get("LOCALAPPDATA", "")) / "OpenAI" / "Codex" / "bin"
-    cands = sorted(base.glob("*/codex.exe"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if cands:
-        return str(cands[0])
+    if os.name == "nt":
+        base = Path(os.environ.get("LOCALAPPDATA", "")) / "OpenAI" / "Codex" / "bin"
+        cands = sorted(base.glob("*/codex.exe"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if cands:
+            return str(cands[0])
+        return "codex"
+    import shutil
+    # As on Windows, prefer the CLI the desktop app bundles: the app keeps it current. On macOS a stale
+    # package-manager build (Homebrew codex 0.156.1) failed every turn with "invalid peer certificate:
+    # UnknownIssuer" against chatgpt.com while the app-bundled 0.160.0 worked.
+    for app in ("/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+                str(Path.home() / "Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"),
+                "/Applications/Codex.app/Contents/Resources/codex"):
+        if os.access(app, os.X_OK):
+            return app
+    found = shutil.which("codex")
+    if found:
+        return found
+    # Services (launchd, systemd) start with a bare PATH, so look where installers put it.
+    for c in ("/opt/homebrew/bin/codex", "/usr/local/bin/codex", str(Path.home() / ".local" / "bin" / "codex"),
+              str(Path.home() / ".npm-global" / "bin" / "codex"),
+              "/Applications/Codex.app/Contents/Resources/codex"):
+        if os.access(c, os.X_OK):
+            return c
     return "codex"
 
 

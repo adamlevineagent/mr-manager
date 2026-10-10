@@ -35,8 +35,10 @@ def current_branch(repo):
     return git(repo, "branch", "--show-current", check=False)
 
 
-def make_worktree(project, name):
-    """Returns (worktree path, repo top, base branch)."""
+def make_worktree(project, name, exclude=()):
+    """Returns (worktree path, repo top, base branch). `exclude` (repo profile) lists gitignore-style
+    patterns left out of the lane's checkout: big recorded artifacts a worker never needs (they stay in
+    the index, so commits and merges are unaffected)."""
     top = repo_top(project)
     base = current_branch(top)
     if not base:
@@ -47,7 +49,12 @@ def make_worktree(project, name):
         raise LifecycleError(f"{wt} or branch {branch} already exists; finish or discard the old worker first "
                              f"(foreman gc shows leftovers)")
     wt.parent.mkdir(parents=True, exist_ok=True)
-    git(top, "worktree", "add", "-b", branch, str(wt), base)
+    if exclude:
+        git(top, "worktree", "add", "--no-checkout", "-b", branch, str(wt), base)
+        git(str(wt), "sparse-checkout", "set", "--no-cone", "/*", *[f"!{p}" for p in exclude])
+        git(str(wt), "checkout", branch)
+    else:
+        git(top, "worktree", "add", "-b", branch, str(wt), base)
     return str(wt), top, base
 
 

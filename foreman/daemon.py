@@ -156,6 +156,10 @@ class Daemon:
             except Exception as e:
                 log("couldn't read", name, e)
                 return {}
+            if not status and not message and now - (w.get("clock_from") or w.get("started") or now) < 180:
+                # a brand-new lane whose first turn the app-server hasn't reported yet: not finished.
+                # (Seen on macOS: wait returned "finished" seconds after assign, then accept said "still working".)
+                return {}
             if status in ("interrupted", "inProgress", "failed") and (w.get("resumed") or 0) < 3:
                 h.send(w["thread"], "Manager: you were cut off by a restart on my side. Pick up where you left "
                                     "off, then finish and send your report.", env=w.get("env"))

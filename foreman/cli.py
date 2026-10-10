@@ -84,6 +84,13 @@ def choose_account(explicit=None):
 
 # ------------------------------------------------------------------------------ assign
 def cmd_assign(a):
+    stop = core.config().get("stop_file")
+    if stop and os.path.exists(os.path.expanduser(stop)):
+        try:
+            why = Path(os.path.expanduser(stop)).read_text(encoding="utf-8").strip()
+        except OSError:
+            why = ""
+        raise SystemExit(f"new assignments are stopped while {stop} exists" + (f": {why}" if why else ""))
     if a.name in core.workers():
         raise SystemExit(f"there's already a worker called {a.name!r}; pick another name or scrap it first")
     leftovers = backlog()
@@ -98,7 +105,8 @@ def cmd_assign(a):
     in_git = subprocess.run(["git", "-C", repo_path, "rev-parse", "--show-toplevel"], capture_output=True).returncode == 0
     readonly = a.readonly or not in_git
     prof = lanes.profile(lifecycle.repo_top(repo_path)) if in_git else {}
-    check = lanes.native_check(a.check or prof.get("check"))
+    # --no-check "why" means no check, even when the repo profile declares a default one.
+    check = None if (a.no_check and not a.check) else lanes.native_check(a.check or prof.get("check"))
     if not readonly and not check and not a.no_check:
         raise SystemExit("How will we know it works? Give --check \"command that must pass\" (or set `check` in the "
                          "repo's .mrm.toml). For work that truly has no runnable check, pass --no-check \"why\".")
@@ -108,8 +116,14 @@ def cmd_assign(a):
     size = a.size or prof.get("size") or d["size"]
     timebox = a.timebox or prof.get("timebox") or d["timebox_minutes"]
     lane, workdir, repo, base, branch = None, repo_path, None, None, None
+    if not readonly and prof.get("max_lanes"):
+        top = lifecycle.repo_top(repo_path)
+        live = [n for n, w in core.workers().items() if w.get("isolated") and w.get("repo") == top]
+        if len(live) >= int(prof["max_lanes"]):
+            raise SystemExit(f"{top} already has {len(live)} lane(s), its .mrm.toml max_lanes; accept or scrap one "
+                             f"first: {', '.join(live)}")
     if not readonly:
-        workdir, repo, base = lifecycle.make_worktree(repo_path, a.name)
+        workdir, repo, base = lifecycle.make_worktree(repo_path, a.name, prof.get("exclude") or ())
         branch = f"worker/{a.name}"
         count = int(prof.get("ports", 10))
         taken = {w.get("port_base") for w in core.workers().values() if w.get("port_base")}
