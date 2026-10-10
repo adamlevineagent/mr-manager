@@ -29,6 +29,7 @@ HOME = _home()
 PORT = int(os.environ.get("MRM_PORT") or os.environ.get("FOREMAN_PORT") or "8777")
 
 DEFAULT_CONFIG = {
+    "watch": [],  # Read-only boards from older local daemons; never managed here.
     # Codex homes to run workers on. Add more with `mrm account add`.
     "accounts": {"a": {"kind": "headless", "home": str(Path.home() / ".codex")}},
     # Opinionated defaults for every assignment; override per assignment.
