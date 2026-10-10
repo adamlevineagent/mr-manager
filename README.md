@@ -114,10 +114,20 @@ size = "large"                 # small | medium | large
 check_timeout = 7200           # seconds the check may take (default 3600), e.g. when builds queue on a lock
 max_lanes = 4                  # at most this many lanes at once in this repo (laptops, shared build locks)
 exclude = ["audits/*observation*/"]   # left out of each lane's checkout (big recorded artifacts); merges unaffected
+on_close = ["docker compose -p {lane} down"]   # optional cleanup commands on accept or scrap
 
 [mrm.env]                      # extra environment for workers; {repo} = the main checkout
 APP_ENV = "test"
 ```
+
+Every lane gets `MRM_SCRATCH`, a private folder at `<MRM_HOME>/scratch/<lane>` outside
+its worktree (default home: `~/.mr-manager`). Put disposable builds, caches and temp files
+there; `accept` and `scrap` delete it. Workers receive this path in their environment and brief.
+Profile `on_close` commands run in the main repo with the lane environment, substituting
+`{lane}` with its name and `{repo}` with the main checkout path. Quote placeholders when
+used as paths. Each command has a 60-second timeout; failures are reported, remaining commands
+and scratch cleanup still run. A locked scratch folder is queued for the daemon or `mrm gc`
+to retry. A refused accept or scrap keeps the lane's scratch and does not run its hooks.
 
 ## On macOS
 

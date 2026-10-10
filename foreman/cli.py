@@ -544,6 +544,7 @@ def cmd_scrap(a):
     if w.get("isolated"):
         lanes.kill_lane_processes(w["workdir"], w.get("port_base"), w.get("port_count") or 0, name=a.name)
         lifecycle.discard(w, a.name, force=a.force)
+        lanes.close_lane(a.name, w, lanes.profile(w["repo"]))
     close(a.name, w, "scrapped")
     print(f"{a.name}: scrapped" + ("; lane removed" if w.get("isolated") else ""))
 

@@ -26,7 +26,8 @@ def build(name, outcome, where, check=None, out_of_scope=None, context=None, tim
     if lane:
         parts += [f"**Ports and environment:** if you start any server, use only ports {lane['port_base']}–"
                   f"{lane['port_base'] + lane['port_count'] - 1} (also in $MRM_PORT_BASE and $PORT). Stop "
-                  "anything you started before your final report.", ""]
+                  "anything you started before your final report. Put disposable build and temp files in "
+                  "$MRM_SCRATCH (outside the worktree); mr-manager deletes it on accept or scrap.", ""]
     if timebox:
         parts += [f"**Time box:** about {timebox} minutes. If you're not done by then, commit what works and "
                   "report PARTIAL with what's left, rather than expanding the work.", ""]
