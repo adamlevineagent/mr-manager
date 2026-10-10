@@ -23,7 +23,8 @@ while True:
     started = time.time()
     with open(HOME / "daemon.log", "a", encoding="utf-8") as out:
         code = subprocess.call([str(python), "-X", "utf8", str(ROOT / "mrm.py"), "daemon"], cwd=ROOT,
-                               stdout=out, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
+                               stdout=out, stderr=subprocess.STDOUT,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     ran = time.time() - started
     fails = fails + 1 if ran < 30 else 0
     if fails <= 1 or fails % 10 == 0:

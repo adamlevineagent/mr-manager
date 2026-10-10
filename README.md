@@ -80,10 +80,25 @@ notes = "Use pnpm. Never touch migrations/."
 timebox = 60                   # minutes; default for lanes in this repo (e.g. slow native builds)
 size = "large"                 # small | medium | large
 check_timeout = 7200           # seconds the check may take (default 3600), e.g. when builds queue on a lock
+max_lanes = 4                  # at most this many lanes at once in this repo (laptops, shared build locks)
+exclude = ["audits/*observation*/"]   # left out of each lane's checkout (big recorded artifacts); merges unaffected
 
 [mrm.env]                      # extra environment for workers; {repo} = the main checkout
 APP_ENV = "test"
 ```
+
+## On macOS
+
+`setup` installs a launchd agent (`~/Library/LaunchAgents/dev.mr-manager.daemon.plist`) that starts at
+sign-in, restarts on exit and logs to `~/.mr-manager/daemon.log`. Services start with a bare PATH, so the
+agent carries one with Homebrew and `~/.local/bin`, and the interpreter path is Homebrew's stable symlink
+rather than a versioned Cellar path a `brew upgrade` would delete. As on Windows, mrm prefers the Codex
+CLI bundled with the ChatGPT desktop app (kept current by the app); set `MRM_CODEX` to pick another.
+`mrm` lands in `~/.local/bin`; if that isn't on your PATH, add `export PATH="$HOME/.local/bin:$PATH"` to
+`~/.zshrc`.
+
+Pause new work while something is wrong (a disk-space guard, say): `mrm config stop_file /path/to/flag`.
+While that file exists, `assign` refuses and shows the file's text as the reason.
 
 ## With Claude Code
 

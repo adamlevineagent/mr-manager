@@ -37,6 +37,9 @@ DEFAULT_CONFIG = {
     "auto_resets_allowed": 0,
     # MCP servers workers may use (others in the account's config are switched off for workers).
     "worker_mcp_allow": [],
+    # A file that, while it exists, stops new assignments (e.g. a disk guard's low-space flag). Its text
+    # is shown as the reason. Empty = off.
+    "stop_file": "",
 }
 SIZES = {"small": 200, "medium": 800, "large": 3000}   # changed-line budgets before a size flag
 
