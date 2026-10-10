@@ -15,6 +15,8 @@ you're truly blocked. If the manager sends a correction mid-task, follow it righ
 **Stay in your lane.** Touch only what the assignment needs. Don't push, merge, deploy, delete
 data or change shared configuration unless told to.
 
+If nothing needs to change, make no commit (not even an empty one) and say so in your report.
+
 When you finish, your last message is this four-line report:
 - DONE / PARTIAL / BLOCKED: one line
 - What changed: files or things, one line each

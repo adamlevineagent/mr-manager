@@ -311,14 +311,14 @@ def cmd_review(a):
     print("\nCOMMITS")
     print(lifecycle.git(w["repo"], "log", "--oneline", f"{w['base']}..worker/{a.name}", check=False) or "  (none)")
     print("\nFILES")
-    print(lifecycle.git(w["workdir"], "diff", "--stat", w["base"], check=False) or "  (no changes)")
+    print(lifecycle.git(w["workdir"], "diff", "--stat", fork_point(w), check=False) or "  (no changes)")
     if w.get("check") and not a.no_check:
         print(f"\nCHECK  {w['check']}")
         ok, out = lanes.run_check(w["check"], w["workdir"], timeout=w.get("check_timeout"))
         print(("PASS" if ok else "FAIL") + "\n" + "\n".join(out.splitlines()[-25:]))
     if a.diff:
         print("\nDIFF")
-        print(lifecycle.git(w["workdir"], "diff", w["base"], check=False))
+        print(lifecycle.git(w["workdir"], "diff", fork_point(w), check=False))
 
 
 def cmd_tail(a):
@@ -369,11 +369,16 @@ def cmd_read(a):
             print_item(it)
 
 
+def fork_point(w):
+    """Diff the lane against where it forked from the base, so newer base commits don't show as reverts."""
+    return lifecycle.git(w["workdir"], "merge-base", w["base"], "HEAD", check=False) or w["base"]
+
+
 def cmd_diff(a):
     w = core.worker(a.name)
     if not w.get("isolated"):
         raise SystemExit(f"{a.name} is read-only; nothing to diff")
-    subprocess.call(["git", "-C", w["workdir"], "diff", *(["--stat"] if a.stat else []), w["base"]])
+    subprocess.call(["git", "-C", w["workdir"], "diff", *(["--stat"] if a.stat else []), fork_point(w)])
 
 
 # ------------------------------------------------------------------------------ decide
