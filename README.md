@@ -171,6 +171,7 @@ notes = "Use pnpm. Never touch migrations/."
 timebox = 60                   # minutes; default for lanes in this repo (e.g. slow native builds)
 size = "large"                 # small | medium | large
 check_timeout = 7200           # seconds the check may take (default 3600), e.g. when builds queue on a lock
+account = "b"                  # pin lanes in this repo to one account (default: the one with most quota left)
 max_lanes = 4                  # at most this many lanes at once in this repo (laptops, shared build locks)
 exclude = ["audits/*observation*/"]   # left out of each lane's checkout (big recorded artifacts); merges unaffected
 on_close = ["docker compose -p {lane} down"]   # optional cleanup commands on accept or scrap

@@ -123,7 +123,7 @@ def cmd_assign(a):
                          "repo's .mrm.toml). For work that truly has no runnable check, pass --no-check \"why\".")
     if a.auto and not readonly and not check:
         raise SystemExit("--auto merges on a passing check, so it needs one: give --check \"command\".")
-    account = choose_account(a.account)
+    account = choose_account(a.account or prof.get("account"))   # .mrm.toml can pin an account
     size = a.size or prof.get("size") or d["size"]
     timebox = a.timebox or prof.get("timebox") or d["timebox_minutes"]
     lane, workdir, repo, base, branch = None, repo_path, None, None, None
