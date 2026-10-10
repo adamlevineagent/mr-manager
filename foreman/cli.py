@@ -455,6 +455,9 @@ def cmd_accept(a):
     close(a.name, w, f"accepted: merged {r['merged_commits']} commit(s) into {r['base']}")
     print(f"{a.name}: merged {r['merged_commits']} commit(s) into {r['base']}"
           + (f" (now {r['head']})" if r.get("head") else "") + "; lane removed, thread archived")
+    if r.get("cleanup_pending"):
+        print(f"  the lane folder is still in use (a shell or editor open in it?), so it's queued for deletion: "
+              f"{r['cleanup_pending']}. The daemon retries; `mrm gc` does too.")
 
 
 def cmd_scrap(a):
@@ -474,9 +477,13 @@ close = acc.close
 
 
 def cmd_gc(a):
+    stuck = lifecycle.retry_deletes()
+    for p in stuck:
+        print(f"still in use, can't delete yet: {p}")
     findings = lifecycle.audit(known_repos() + ([a.repo] if a.repo else []), core.workers())
     if not findings:
-        print("clean: no worker worktrees or branches left anywhere")
+        print("clean: no worker worktrees or branches left anywhere" if not stuck else
+              "no worker worktrees or branches left; the folders above are queued for deletion")
         return
     for f in findings:
         print(f"{f['kind']:<16} {f['branch']:<30} unmerged={f['unmerged']}  {f['worktree'] or '(no worktree)'}")
