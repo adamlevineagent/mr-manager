@@ -8,6 +8,7 @@ Order matters:
 """
 import subprocess
 import time
+from pathlib import Path
 
 from . import core, lanes, lifecycle
 
@@ -48,6 +49,16 @@ def integrate_base(name, w, notify_worker=True):
 
 def accept(name, w, commit=False, check=None, skip_check=False, message=None, force=False, log=print):
     """Merge the lane if it's ready. Raises NotAccepted with the reason otherwise."""
+    branch = f"worker/{name}"
+    listed = lifecycle.git(w["repo"], "worktree", "list", "--porcelain", check=False)
+    if not any(Path(l[9:]) == Path(w["workdir"]) for l in listed.splitlines() if l.startswith("worktree ")):
+        # git no longer knows the lane (an earlier accept merged it, then hit a locked folder): finish the cleanup
+        if lifecycle.git(w["repo"], "branch", "--list", branch, check=False) and \
+                lifecycle.ahead(w["repo"], w["base"], branch):
+            raise NotAccepted("merge", f"{name}'s worktree is gone but {branch} has unmerged commits. "
+                                       f"Merge it by hand (git merge {branch}), or scrap --force to drop them.")
+        pending = lifecycle.cleanup(w["repo"], w["workdir"], branch, force=False)
+        return {"merged_commits": 0, "base": w["base"], "head": None, "cleanup_pending": pending}
     st = core.backend(w["account"]).status(thread_id=w["thread"])
     if st.get("running") and not force:
         raise NotAccepted("running", f"{name} is still working")
