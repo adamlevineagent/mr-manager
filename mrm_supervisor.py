@@ -1,10 +1,17 @@
 """Keeps the mr-manager daemon running; started by the "Mr Manager daemon" scheduled task
 (or launchd/systemd) so it never depends on an agent or terminal session. If another daemon already
 holds the port, this one keeps retrying with backoff and takes over when that one exits."""
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+# Optional: --port N / --home PATH run a second, separate instance (e.g. a board-only daemon next to
+# another manager). Scheduled tasks can't set environment variables, so they pass these as arguments.
+for flag, var in (("--port", "MRM_PORT"), ("--home", "MRM_HOME")):
+    if flag in sys.argv[1:-1]:
+        os.environ[var] = sys.argv[sys.argv.index(flag) + 1]
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))

@@ -61,6 +61,7 @@ def accept(name, w, commit=False, check=None, skip_check=False, message=None, fo
                                        f"Merge it by hand (git merge {branch}), or scrap --force to drop them.")
         merge_secondaries(name, w, commit=commit, log=log)
         pending = lifecycle.cleanup(w["repo"], w["workdir"], branch, force=False)
+        lanes.close_lane(name, w, lanes.profile(w["repo"]), log=log)
         return {"merged_commits": 0, "base": w["base"], "head": None, "cleanup_pending": pending}
     st = core.backend(w["account"]).status(thread_id=w["thread"])
     if st.get("running") and not force:
@@ -91,9 +92,11 @@ def accept(name, w, commit=False, check=None, skip_check=False, message=None, fo
             log(f"stopped {len(killed)} process(es) still running in the lane")
         try:
             merge_secondaries(name, w, commit=commit, log=log, locked=True)
-            return lifecycle.finish(w, name, message=message or f"Merge worker/{name}: {w.get('outcome', '')[:60]}")
+            result = lifecycle.finish(w, name, message=message or f"Merge worker/{name}: {w.get('outcome', '')[:60]}")
         except lifecycle.LifecycleError as e:
             raise NotAccepted("merge", str(e))
+        lanes.close_lane(name, w, lanes.profile(w["repo"]), log=log)
+        return result
 
 
 def prepare_secondaries(name, w, commit=False):
