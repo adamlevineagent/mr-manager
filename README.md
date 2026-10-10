@@ -45,7 +45,8 @@ git clone https://github.com/adamlevineagent/mr-manager
 python mr-manager/mrm.py setup
 ```
 
-`setup` checks prerequisites, signs in accounts, puts `mrm` on your PATH, installs the Claude Code
+`setup` checks prerequisites, signs in accounts and proves each can complete a real API turn before
+installing anything. It then puts `mrm` on your PATH, installs the Claude Code
 skill, runs the daemon as a background service (Task Scheduler, launchd or systemd), and proves it
 end to end: a real worker does a tiny task in a scratch repo and gets checked and merged.
 
@@ -62,7 +63,8 @@ mrm nudge NAME "correction"                         # steer mid-turn (lands at i
 mrm scrap NAME                                      # throw the lane away
 ```
 
-Also: `park NAME [why]` (keep a finished lane on purpose, off NEEDS YOU; `--undo`), `check NAME [CMD]`, `tail NAME -f`, `read NAME`, `diff NAME`, `history [NAME]`, `usage`,
+Also: `mrm probe [ACCOUNT]` (a tiny real turn for one or all accounts, without the daemon; shows the CLI,
+version and actual error on failure), `park NAME [why]` (keep a finished lane on purpose, off NEEDS YOU; `--undo`), `check NAME [CMD]`, `tail NAME -f`, `read NAME`, `diff NAME`, `history [NAME]`, `usage`,
 `gc [--clean]`, `account add|list|remove`, `config`.
 
 Assignment options: `--not-doing` (scope), `--read FILE...` (read first), `--detail` (more brief),
@@ -99,6 +101,18 @@ CLI bundled with the ChatGPT desktop app (kept current by the app); set `MRM_COD
 
 Pause new work while something is wrong (a disk-space guard, say): `mrm config stop_file /path/to/flag`.
 While that file exists, `assign` refuses and shows the file's text as the reason.
+
+Keep new lanes in one folder with `mrm config lanes_dir /path/to/lanes`. They go into
+`/path/to/lanes/<repo folder name>/<lane name>`; the default `""` keeps today's `<repo>-wt/<lane>`
+layout. Existing lanes stay where they are, and `gc` finds both layouts through Git's worktree list.
+
+When there are lanes, `mrm status` ends with their total disk use and the biggest lane. It says
+`lanes on disk: measuring…` until the first measurement. The daemon caches file sizes every
+three minutes on one background thread, including idle and parked lanes; shared symlinks and
+junctions are excluded. Set `mrm config max_lanes_gb 100` to refuse new assignments while the
+cached total exceeds 100 GB (1 GB = 1,000,000,000 bytes), with the biggest lanes listed so you can accept or
+scrap them. The default `0` disables the limit. This blocks new work; running lanes can still grow
+between scans.
 
 ## With Claude Code
 

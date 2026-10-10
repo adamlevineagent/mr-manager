@@ -42,6 +42,10 @@ DEFAULT_CONFIG = {
     # A file that, while it exists, stops new assignments (e.g. a disk guard's low-space flag). Its text
     # is shown as the reason. Empty = off.
     "stop_file": "",
+    # Empty keeps the <repo>-wt layout; otherwise lanes go under lanes_dir/<repo>/<name>.
+    "lanes_dir": "",
+    # Refuse new assignments when the cached live-lane total exceeds this many GB. Zero = off.
+    "max_lanes_gb": 0,
 }
 SIZES = {"small": 200, "medium": 800, "large": 3000}   # changed-line budgets before a size flag
 

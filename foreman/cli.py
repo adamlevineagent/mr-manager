@@ -10,7 +10,7 @@ The loop:
   mrm nudge NAME "correction"                            steer mid-task (lands at its next step)
   mrm scrap NAME [--force]                               throw the lane away
 
-Also: tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
+Also: probe [ACCOUNT] | tail NAME | read NAME | diff NAME | history [NAME] | usage | gc [--clean] | account add/list | setup
 The watchdog enforces time boxes and flags ceremony on its own. Every lane ends in accept or scrap.
 assign --auto lets the watchdog accept a clean DONE itself (check passes, in budget, no ceremony);
 those show up under MERGED WHILE YOU WERE AWAY on the next `mrm status`.
@@ -84,21 +84,29 @@ def choose_account(explicit=None):
 
 # ------------------------------------------------------------------------------ assign
 def cmd_assign(a):
-    stop = core.config().get("stop_file")
+    cfg = core.config()
+    stop = cfg.get("stop_file")
     if stop and os.path.exists(os.path.expanduser(stop)):
         try:
             why = Path(os.path.expanduser(stop)).read_text(encoding="utf-8").strip()
         except OSError:
             why = ""
         raise SystemExit(f"new assignments are stopped while {stop} exists" + (f": {why}" if why else ""))
-    if a.name in core.workers():
+    ws = core.workers()
+    if a.name in ws:
         raise SystemExit(f"there's already a worker called {a.name!r}; pick another name or scrap it first")
+    sizes = lane_sizes(ws)
+    total = sum(size for _, size in sizes)
+    limit = float(cfg.get("max_lanes_gb") or 0)
+    if limit > 0 and total > limit * lanes.GB:
+        biggest = ", ".join(f"{name} {size / lanes.GB:.1f} GB" for name, size in sizes[:3])
+        raise SystemExit(f"lanes on disk: {total / lanes.GB:.1f} GB, over max_lanes_gb {limit:g}; "
+                         f"accept or scrap lanes first. Biggest: {biggest}")
     leftovers = backlog()
     if leftovers and not a.allow_leftovers:
         raise SystemExit("clean up first. These lanes were merged or abandoned but their worktrees remain:\n" +
                          "\n".join(f"  {f['kind']:<16} {f['branch']} in {f['repo']}" for f in leftovers) +
                          "\nRun: mrm gc --clean   (removes the merged ones; scrap the rest)")
-    cfg = core.config()
     d = cfg["defaults"]
     outcome = read_text_arg(a.outcome)
     repo_path = os.path.abspath(a.repo or os.getcwd())
@@ -169,6 +177,24 @@ def known_repos():
 
 
 # ------------------------------------------------------------------------------ status
+def lane_sizes(ws):
+    """Cached sizes of all registered lanes, including idle and parked workers."""
+    return sorted(((name, w.get("disk_bytes") or 0) for name, w in ws.items() if w.get("isolated")),
+                  key=lambda item: item[1], reverse=True)
+
+
+def print_lane_disk_usage(ws):
+    sizes = lane_sizes(ws)
+    if not sizes:
+        return
+    if not any(w.get("disk_bytes") is not None for w in ws.values() if w.get("isolated")):
+        print("lanes on disk: measuring…")
+        return
+    total = sum(size for _, size in sizes)
+    biggest = f" ({sizes[0][0]} {sizes[0][1] / lanes.GB:.1f} GB)"
+    print(f"lanes on disk: {total / lanes.GB:.1f} GB{biggest}")
+
+
 def live_counts(w, name):
     if not w.get("isolated"):
         return "", []
@@ -249,6 +275,7 @@ def cmd_status(a):
     leftovers = backlog()
     if leftovers:
         print(f"\n⚑ {len(leftovers)} leftover lane(s) on disk; run: mrm gc")
+    print_lane_disk_usage(ws)
 
 
 def cmd_wait(a):
@@ -311,14 +338,14 @@ def cmd_review(a):
     print("\nCOMMITS")
     print(lifecycle.git(w["repo"], "log", "--oneline", f"{w['base']}..worker/{a.name}", check=False) or "  (none)")
     print("\nFILES")
-    print(lifecycle.git(w["workdir"], "diff", "--stat", w["base"], check=False) or "  (no changes)")
+    print(lifecycle.git(w["workdir"], "diff", "--stat", fork_point(w), check=False) or "  (no changes)")
     if w.get("check") and not a.no_check:
         print(f"\nCHECK  {w['check']}")
         ok, out = lanes.run_check(w["check"], w["workdir"], timeout=w.get("check_timeout"))
         print(("PASS" if ok else "FAIL") + "\n" + "\n".join(out.splitlines()[-25:]))
     if a.diff:
         print("\nDIFF")
-        print(lifecycle.git(w["workdir"], "diff", w["base"], check=False))
+        print(lifecycle.git(w["workdir"], "diff", fork_point(w), check=False))
 
 
 def cmd_tail(a):
@@ -369,11 +396,16 @@ def cmd_read(a):
             print_item(it)
 
 
+def fork_point(w):
+    """Diff the lane against where it forked from the base, so newer base commits don't show as reverts."""
+    return lifecycle.git(w["workdir"], "merge-base", w["base"], "HEAD", check=False) or w["base"]
+
+
 def cmd_diff(a):
     w = core.worker(a.name)
     if not w.get("isolated"):
         raise SystemExit(f"{a.name} is read-only; nothing to diff")
-    subprocess.call(["git", "-C", w["workdir"], "diff", *(["--stat"] if a.stat else []), w["base"]])
+    subprocess.call(["git", "-C", w["workdir"], "diff", *(["--stat"] if a.stat else []), fork_point(w)])
 
 
 # ------------------------------------------------------------------------------ decide
@@ -450,6 +482,9 @@ def cmd_accept(a):
     close(a.name, w, f"accepted: merged {r['merged_commits']} commit(s) into {r['base']}")
     print(f"{a.name}: merged {r['merged_commits']} commit(s) into {r['base']}"
           + (f" (now {r['head']})" if r.get("head") else "") + "; lane removed, thread archived")
+    if r.get("cleanup_pending"):
+        print(f"  the lane folder is still in use (a shell or editor open in it?), so it's queued for deletion: "
+              f"{r['cleanup_pending']}. The daemon retries; `mrm gc` does too.")
 
 
 def cmd_scrap(a):
@@ -459,7 +494,7 @@ def cmd_scrap(a):
     except SystemExit:
         pass
     if w.get("isolated"):
-        lanes.kill_lane_processes(w["workdir"], w.get("port_base"), w.get("port_count") or 0)
+        lanes.kill_lane_processes(w["workdir"], w.get("port_base"), w.get("port_count") or 0, name=a.name)
         lifecycle.discard(w, a.name, force=a.force)
     close(a.name, w, "scrapped")
     print(f"{a.name}: scrapped" + ("; lane removed" if w.get("isolated") else ""))
@@ -469,9 +504,13 @@ close = acc.close
 
 
 def cmd_gc(a):
+    stuck = lifecycle.retry_deletes()
+    for p in stuck:
+        print(f"still in use, can't delete yet: {p}")
     findings = lifecycle.audit(known_repos() + ([a.repo] if a.repo else []), core.workers())
     if not findings:
-        print("clean: no worker worktrees or branches left anywhere")
+        print("clean: no worker worktrees or branches left anywhere" if not stuck else
+              "no worker worktrees or branches left; the folders above are queued for deletion")
         return
     for f in findings:
         print(f"{f['kind']:<16} {f['branch']:<30} unmerged={f['unmerged']}  {f['worktree'] or '(no worktree)'}")
@@ -569,6 +608,12 @@ def cmd_setup(a):
     setup.run(a)
 
 
+def cmd_probe(a):
+    from . import probe
+    if not probe.run(a.account):
+        raise SystemExit(1)
+
+
 # ------------------------------------------------------------------------------ main
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="mrm", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -629,6 +674,8 @@ def main(argv=None):
     s.set_defaults(fn=cmd_config)
     s = sub.add_parser("setup", help="install everything and run a smoke test")
     s.add_argument("--skip-smoke", action="store_true"); s.set_defaults(fn=cmd_setup)
+    s = sub.add_parser("probe", help="prove each account can complete a real Codex turn (no daemon)")
+    s.add_argument("account", nargs="?"); s.set_defaults(fn=cmd_probe)
     sub.add_parser("daemon", help="run the daemon (normally a background service)").set_defaults(
         fn=lambda a: __import__("foreman.daemon", fromlist=["main"]).main())
 
