@@ -260,7 +260,7 @@ def cmd_status(a):
         if row["source"] != group:
             group = row["source"]
             print(f"\n{group} (read-only)")
-        print(f"  {row['name']:<22} {row['status']:<10} {int(row['elapsed_minutes'])}m  {row['repo']}")
+        print(f"  {row['name']:<22} {row['status']:<10} {('--' if row['elapsed_minutes'] is None else str(int(row['elapsed_minutes'])) + 'm')}  {row['repo']}")
     leftovers = backlog()
     if leftovers:
         print(f"\n{len(leftovers)} leftover lane(s) on disk; run: mrm gc")

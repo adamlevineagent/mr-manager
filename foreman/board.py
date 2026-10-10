@@ -8,14 +8,35 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-from . import core
+from . import core, lanes
 
 _counts = {}
 _lock = threading.Lock()
 _watch_cache = {}
 _watch_refresh = {}
 _watch_busy = set()
+_watch_disk = {}  # workdir -> (bytes, measured at); never persisted to watched registries.
 quotas = {}  # Filled by the daemon only, from already-running account hosts.
+
+
+def size_watched_lanes():
+    """Called only by the sizing thread; read-only walks no more than every ten minutes."""
+    for source in core.config().get("watch", []):
+        try:
+            ws = json.loads(Path(source.get("registry") or "").expanduser().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for w in ws.values():
+            if not w.get("workdir"):
+                continue
+            workdir = str(Path(w["workdir"]).expanduser())
+            with _lock:
+                cached = _watch_disk.get(workdir)
+            if cached and time.time() - cached[1] < 600:
+                continue
+            size = lanes.disk_usage([workdir])
+            with _lock:
+                _watch_disk[workdir] = (size, time.time())
 
 
 def watched_rows(now):
@@ -43,11 +64,13 @@ def watched_rows(now):
         for name, w in ws.items():
             with _lock:
                 live = _watch_cache.get((key, name, w.get("thread")))
+                disk = _watch_disk.get(str(Path(w["workdir"]).expanduser())) if w.get("workdir") else None
             status = "?" if live is None else "WORKING" if live.get("running") else "IDLE"
             since = w.get("started") if status == "WORKING" else (live or {}).get("at")
             rows.append(dict(key=registry + ":" + name, name=name, status=status, source=label, watched=True,
                              repo=Path(w.get("repo") or w.get("project") or w.get("workdir") or "").name,
-                             elapsed_minutes=round(max(0, (now - (since or now)) / 60), 1),
+                             elapsed_minutes=round(max(0, (now - since) / 60), 1) if since else None,
+                             disk_bytes=disk[0] if disk else None,
                              note=w.get("outcome") or "", account=w.get("account"), flags=[], auto=False))
     return rows
 
@@ -130,6 +153,7 @@ def board_data():
                          waiting_minutes=round(waiting, 1), waiting_since=w.get("waiting_since"),
                          started=w.get("started"), note=" ".join(note.split())[:110],
                          commits=commits, lines=lines, flags=flags, account=w.get("account"),
+                         disk_bytes=w.get("disk_bytes"),
                          auto=bool(w.get("auto")), adopted=bool(w.get("adopted"))))
     rows.sort(key=lambda r: (0 if r["status"] == "NEEDS YOU" else
                             1 if r["status"] in ("WORKING", "AUTO-MERGE") else
@@ -141,5 +165,7 @@ def board_data():
     merged = [dict(name=h.get("name"), result=h.get("result"), closed=h.get("closed"),
                    auto_merged=bool(h.get("auto_merged"))) for h in recent]
     sizes = [w["disk_bytes"] for w in ws.values() if w.get("isolated") and w.get("disk_bytes") is not None]
-    return dict(now=now, lanes=rows, watched=watched_rows(now), merged=merged, quotas=dict(quotas),
+    watched = watched_rows(now)
+    sizes.extend(r["disk_bytes"] for r in watched if r["disk_bytes"] is not None)
+    return dict(now=now, lanes=rows, watched=watched, merged=merged, quotas=dict(quotas),
                 disk_bytes=sum(sizes) if sizes else None)

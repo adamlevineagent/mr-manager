@@ -113,6 +113,7 @@ class Daemon:
         while True:
             try:
                 self.size_lanes()
+                board.size_watched_lanes()
             except (Exception, SystemExit):
                 traceback.print_exc()
             time.sleep(TICK)
