@@ -136,7 +136,10 @@ def board_data():
         state = w.get("state") or "unknown"
         status = {"idle": "NEEDS YOU", "working": "WORKING", "accepting": "AUTO-MERGE",
                   "parked": "PARKED"}.get(state, state.upper())
-        elapsed = max(0, (now - (w.get("clock_from") or w.get("started") or now)) / 60)
+        plan_pending = w.get("plan_first") and not w.get("plan_approved")
+        if state == "idle" and plan_pending and w.get("report_kind") == "PLAN":
+            status = "PLAN REVIEW"
+        elapsed = 0 if plan_pending else max(0, (now - (w.get("clock_from") or w.get("started") or now)) / 60)
         waiting = max(0, (now - (w.get("waiting_since") or now)) / 60)
         box = w.get("timebox")
         flags = []
@@ -149,7 +152,7 @@ def board_data():
             flags.append("big")
         if w.get("ceremony_nudged"):
             flags.append("ceremony")
-        if state == "working" and box and elapsed > box:
+        if state == "working" and not plan_pending and box and elapsed > box:
             flags.append("over time box")
         head = (w.get("report") or "").strip().splitlines()
         note = w.get("auto_note") or (head[0] if head else w.get("outcome") or w.get("parked_why") or "")
@@ -160,10 +163,10 @@ def board_data():
                          commits=commits, lines=lines, flags=flags, account=w.get("account"),
                          disk_bytes=w.get("disk_bytes"),
                          auto=bool(w.get("auto")), adopted=bool(w.get("adopted"))))
-    rows.sort(key=lambda r: (0 if r["status"] == "NEEDS YOU" else
+    rows.sort(key=lambda r: (0 if r["status"] in ("NEEDS YOU", "PLAN REVIEW") else
                             1 if r["status"] in ("WORKING", "AUTO-MERGE") else
                             3 if r["status"] == "PARKED" else 2,
-                            (r["waiting_since"] or 0) if r["status"] == "NEEDS YOU" else
+                            (r["waiting_since"] or 0) if r["status"] in ("NEEDS YOU", "PLAN REVIEW") else
                             (r["started"] or 0), r["name"]))
     recent = sorted((h for h in core.history() if (h.get("closed") or 0) >= now - 86400),
                     key=lambda h: h.get("closed") or 0, reverse=True)[:6]

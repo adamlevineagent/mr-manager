@@ -33,6 +33,34 @@ auto-merged. Slow repos set `timebox`, `size` and `check_timeout` in `.mrm.toml`
 and prints the next move. On a conflict the worker has already been told to resolve it: `mrm wait
 NAME`, then accept again.
 
+## Plan-first review gate
+
+Use `mrm assign NAME "outcome" --plan --check "command"` to have the worker investigate,
+send a message starting PLAN, and stop before making code changes. Set `plan_first = true`
+under `[mrm]` in the repo's `.mrm.toml` to make this the repo default; `--no-plan` overrides it.
+The board shows PLAN REVIEW; `mrm status` groups it under NEEDS YOU with kind PLAN.
+
+Run `mrm plan NAME` to print and save the full plan to `<MRM_HOME>/plans/NAME.md`
+(or `mrm plan NAME --out FILE`). The saved file includes the lane path and branch.
+Brief the reviewer with the owner's standing rules, not just the task, and point them at
+that file and branch. Ask the reviewer to reply in this format:
+
+```text
+VERDICT: APPROVE / REVISE / REJECT
+CHANGES: required corrections (or none)
+WHY: reasons for the verdict and changes
+```
+
+Pass the review verbatim with `mrm approve NAME REVIEW_FILE` (or quoted review text).
+APPROVE starts the build and its time box. A first-line VERDICT of REVISE or REJECT
+requests a revised PLAN and keeps the lane in plan stage. Auto-accept and time-box
+wrap-up/stop orders wait for approval.
+
+The full gate is **plan review ? build ? diff review ? fix re-check ? accept**.
+After the build, review the diff, send concrete fixes with `mrm reject`, and have the
+reviewer re-check those fixes before `mrm accept`. Use manual acceptance for this full
+review gate; `--auto` can merge after the approved build passes its automatic checks.
+
 ## Writing the assignment (this decides everything)
 
 - **The outcome is something a person can do or see:** "`calc eval "-(2+3)*2"` prints -10", not
