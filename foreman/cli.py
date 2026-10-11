@@ -139,7 +139,7 @@ def cmd_assign(a):
     env = lanes.lane_env(lane["port_base"], lane["port_count"], prof, a.name, workdir) if lane else None
     tid = core.backend(account).create(prompt=text, title=f"mrm · {a.name}", cwd=workdir,
                                        model=a.model or d.get("model"), effort=a.effort or d.get("effort"), env=env)
-    core.save_worker(a.name, account=account, thread=tid, project=repo_path, workdir=workdir, repo=repo, base=base,
+    core.save_worker(a.name, _create=True, account=account, thread=tid, project=repo_path, workdir=workdir, repo=repo, base=base,
                      isolated=bool(repo), started=time.time(), clock_from=time.time(), timebox=timebox, size=size,
                      check=check, brief_text=text, outcome=outcome[:500], state="working", readonly=readonly,
                      port_base=lane and lane["port_base"], port_count=lane and lane["port_count"],

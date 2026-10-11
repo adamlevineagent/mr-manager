@@ -73,7 +73,7 @@ class Daemon:
     def tick(self):
         now = time.time()
         for name, w in core.workers().items():
-            if w.get("legacy") or w["account"] not in core.config()["accounts"] or name in self.accepting \
+            if w.get("legacy") or w.get("account") not in core.config()["accounts"] or name in self.accepting \
                     or w.get("state") == "parked":
                 continue
             h = self.host(w["account"])

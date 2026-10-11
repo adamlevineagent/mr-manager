@@ -169,9 +169,14 @@ def workers():
     return load_json("workers.json", {})
 
 
-def save_worker(name, **fields):
+def save_worker(name, _create=False, **fields):
+    """Update a worker's row. Only assign creates one (_create=True): a late update from the daemon or a
+    CLI command racing a scrap must not resurrect a removed worker as a partial row with no account, which
+    crashed every daemon tick (seen on macOS, 2026-10-10)."""
     with registry_lock():
         w = workers()
+        if name not in w and not _create:
+            return None
         w[name] = dict(w.get(name, {}), **fields)
         save_json("workers.json", w)
         return w[name]
