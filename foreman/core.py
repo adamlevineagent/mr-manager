@@ -250,8 +250,17 @@ def ensure_daemon():
             subprocess.Popen([sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent.parent / "mrm.py"),
                               "daemon"], creationflags=flags, close_fds=True)
     else:
-        subprocess.Popen([sys.executable, str(Path(__file__).resolve().parent.parent / "mrm.py"), "daemon"],
-                         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        plist = Path.home() / "Library" / "LaunchAgents" / "dev.mr-manager.daemon.plist"
+        started = False
+        if sys.platform == "darwin" and plist.exists():
+            # The service owns the daemon. Spawning a detached copy here races it for the port: the copy wins
+            # while launchd restarts, and launchd's own daemon then crash-loops on "address already in use".
+            r = subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/dev.mr-manager.daemon"],
+                               capture_output=True)
+            started = r.returncode == 0
+        if not started:
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve().parent.parent / "mrm.py"), "daemon"],
+                             start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(40):
         time.sleep(0.25)
         if daemon_alive():
